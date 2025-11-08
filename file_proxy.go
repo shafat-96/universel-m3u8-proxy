@@ -74,6 +74,12 @@ func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, p
 	}
 	defer resp.Body.Close()
 
+	// Check if response is successful
+	if resp.StatusCode != http.StatusOK {
+		sendError(w, resp.StatusCode, "Upstream server returned error", fmt.Sprintf("Status: %d", resp.StatusCode))
+		return
+	}
+
 	body, err := readResponseBody(resp)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, "Failed to read m3u8 content", err.Error())
@@ -81,6 +87,12 @@ func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, p
 	}
 
 	m3u8Content := string(body)
+	
+	// Validate that this is actually an M3U8 file
+	if !strings.HasPrefix(strings.TrimSpace(m3u8Content), "#EXTM3U") {
+		sendError(w, http.StatusBadGateway, "Invalid m3u8 content", "Response does not start with #EXTM3U")
+		return
+	}
 	lines := strings.Split(m3u8Content, "\n")
 	newLines := make([]string, 0, len(lines))
 
