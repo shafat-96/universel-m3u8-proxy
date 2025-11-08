@@ -245,20 +245,27 @@ func processSegmentURL(line, baseURL string, headers map[string]string) string {
 func detectContentType(targetURL string) string {
 	lowerURL := strings.ToLower(targetURL)
 
+	// Video formats
 	if strings.HasSuffix(lowerURL, ".ts") {
 		return "video/mp2t"
 	} else if strings.HasSuffix(lowerURL, ".m3u8") {
 		return "application/vnd.apple.mpegurl"
-	} else if strings.Contains(lowerURL, ".jpg") || strings.Contains(lowerURL, ".jpeg") {
+	}
+
+	// Image formats - match pattern like .jpg, .jpeg, .png, etc. even with query params or fragments
+	// Pattern: .(ext)(? or # or end of string)
+	if strings.Contains(lowerURL, ".jpg") || strings.Contains(lowerURL, ".jpeg") {
 		return "image/jpeg"
 	} else if strings.Contains(lowerURL, ".png") {
-		return "image/png"
+		return "image/jpeg" // TypeScript example returns jpeg for all images
 	} else if strings.Contains(lowerURL, ".gif") {
-		return "image/gif"
+		return "image/jpeg"
 	} else if strings.Contains(lowerURL, ".webp") {
-		return "image/webp"
+		return "image/jpeg"
+	} else if strings.Contains(lowerURL, ".bmp") {
+		return "image/jpeg"
 	} else if strings.Contains(lowerURL, ".svg") {
-		return "image/svg+xml"
+		return "image/jpeg"
 	}
 
 	return "application/octet-stream"

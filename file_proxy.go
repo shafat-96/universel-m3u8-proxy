@@ -102,21 +102,19 @@ func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, p
 	encodedHost := url.QueryEscape(host)
 
 	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-
-		if strings.HasPrefix(trimmed, "#") {
+		if strings.HasPrefix(line, "#") {
 			// Handle key URIs in #EXT‑X‑KEY lines
-			if strings.Contains(trimmed, "URI=") {
-				newLines = append(newLines, processFileKeyURI(trimmed, targetURL, encodedHost, prefix, headersParam))
+			if strings.Contains(line, "URI=") {
+				newLines = append(newLines, processFileKeyURI(line, targetURL, encodedHost, prefix, headersParam))
 			} else {
-				newLines = append(newLines, trimmed)
+				newLines = append(newLines, line)
 			}
-		} else {
+		} else if strings.TrimSpace(line) != "" {
 			// Handle segment URLs - resolve against base URL
-			newLines = append(newLines, processFileSegmentURL(trimmed, targetURL, encodedHost, prefix, headersParam))
+			newLines = append(newLines, processFileSegmentURL(line, targetURL, encodedHost, prefix, headersParam))
+		} else {
+			// Preserve empty lines
+			newLines = append(newLines, line)
 		}
 	}
 
@@ -133,14 +131,19 @@ func handleFileSegmentProxy(w http.ResponseWriter, targetURL string, headers map
 	}
 	defer resp.Body.Close()
 
-	contentType := resp.Header.Get("Content‑Type")
-	if contentType == "" {
-		contentType = detectContentType(targetURL)
+	// Prefer upstream content type; fallback by extension
+	upstreamContentType := resp.Header.Get("Content-Type")
+	if upstreamContentType != "" {
+		w.Header().Set("Content-Type", upstreamContentType)
+	} else {
+		// Fallback to detection based on URL extension
+		w.Header().Set("Content-Type", detectContentType(targetURL))
 	}
 
-	w.Header().Set("Content‑Type", contentType)
+	// Forward status code from upstream
 	w.WriteHeader(resp.StatusCode)
 
+	// Stream the response
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		log.Printf("Error streaming file response: %v", err)
 	}
