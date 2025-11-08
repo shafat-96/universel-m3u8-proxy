@@ -10,9 +10,6 @@ import (
 	"strings"
 )
 
-// universalHLSProxyHandler handles any HLS playback proxy requests with dynamic prefix detection
-// Works with: /hls-playback/, /v3-hls-playback/, /v2-hls-playback/, etc.
-// Example: /hls-playback/encoded_path/playlist.m3u8?host=https://example.com&headers={...}
 func universalHLSProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Detect the prefix pattern (e.g., /hls-playback/, /v3-hls-playback/)
 	pathParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
@@ -20,10 +17,10 @@ func universalHLSProxyHandler(w http.ResponseWriter, r *http.Request) {
 		sendError(w, http.StatusBadRequest, "Invalid HLS proxy path", nil)
 		return
 	}
-	
+
 	prefix := "/" + pathParts[0] + "/"
 	path := pathParts[1]
-	
+
 	if path == "" {
 		sendError(w, http.StatusBadRequest, "Invalid HLS proxy path", nil)
 		return
@@ -74,7 +71,7 @@ func handleUniversalM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPa
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, "Failed to read m3u8 content", err.Error())
 		return

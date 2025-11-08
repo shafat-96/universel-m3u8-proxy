@@ -74,7 +74,7 @@ func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, p
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, "Failed to read m3u8 content", err.Error())
 		return

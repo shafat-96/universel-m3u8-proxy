@@ -29,7 +29,7 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := readResponseBody(resp)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, "Failed to read m3u8 content", err.Error())
 		return

@@ -1,8 +1,10 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -78,6 +80,23 @@ func makeRequest(targetURL string, headers map[string]string, rangeHeader *strin
 	}
 
 	return client.Do(req)
+}
+
+// readResponseBody reads and decompresses response body if needed
+func readResponseBody(resp *http.Response) ([]byte, error) {
+	var reader io.ReadCloser = resp.Body
+	
+	// Check if response is gzip-compressed
+	if strings.Contains(strings.ToLower(resp.Header.Get("Content-Encoding")), "gzip") {
+		gz, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer gz.Close()
+		reader = gz
+	}
+	
+	return io.ReadAll(reader)
 }
 
 // resolveURL resolves a relative URL against a base URL
