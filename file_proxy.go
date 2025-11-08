@@ -160,26 +160,24 @@ func processFileKeyURI(line, encodedHost, basePath, prefix, headersParam string)
 	// Build the new proxy URI
 	var newURI string
 	if strings.HasPrefix(originalURI, "http://") || strings.HasPrefix(originalURI, "https://") {
-		// Absolute URL - extract path
+		// Absolute URL - extract path (don't re-encode, already encoded)
 		if parsed, err := url.Parse(originalURI); err == nil {
-			encodedPath := url.PathEscape(parsed.Path)
 			newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 				webServerURL,
 				prefix,
-				encodedPath,
+				parsed.Path,
 				encodedHost,
 				headersParam)
 		} else {
 			return line
 		}
 	} else {
-		// Relative URL
+		// Relative URL (don't encode, already encoded in M3U8)
 		keyPath := basePath + originalURI
-		encodedKey := url.PathEscape(keyPath)
 		newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 			webServerURL,
 			prefix,
-			encodedKey,
+			keyPath,
 			encodedHost,
 			headersParam)
 	}
@@ -195,25 +193,23 @@ func processFileSegmentURL(line, encodedHost, basePath, prefix, headersParam str
 	if strings.HasPrefix(trimmedLine, "http://") || strings.HasPrefix(trimmedLine, "https://") {
 		// Extract path from absolute URL
 		if parsed, err := url.Parse(trimmedLine); err == nil {
-			// URL-encode the path to handle special characters
-			encodedPath := url.PathEscape(parsed.Path)
+			// Don't re-encode the path, it's already properly encoded
 			return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 				webServerURL,
 				prefix,
-				encodedPath,
+				parsed.Path,
 				encodedHost,
 				headersParam)
 		}
 		return line
 	}
 
-	// Relative URL - combine with base path and URL-encode
+	// Relative URL - combine with base path (don't encode, already encoded in M3U8)
 	segmentPath := basePath + trimmedLine
-	encodedSegment := url.PathEscape(segmentPath)
 	return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 		webServerURL,
 		prefix,
-		encodedSegment,
+		segmentPath,
 		encodedHost,
 		headersParam)
 }
