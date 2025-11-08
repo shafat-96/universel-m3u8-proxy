@@ -1,14 +1,12 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 )
 
@@ -19,298 +17,439 @@ func validateRequest(r *http.Request) (string, map[string]string, error) {
 		return "", nil, fmt.Errorf("URL parameter is required")
 	}
 
-	headers := make(map[string]string)
-	if h := r.URL.Query().Get("headers"); h != "" {
-		if decoded, err := url.QueryUnescape(h); err == nil {
-			_ = json.Unmarshal([]byte(decoded), &headers)
+	parsedHeaders := make(map[string]string)
+	headersParam := r.URL.Query().Get("headers")
+	if headersParam != "" {
+		decodedHeaders, err := url.QueryUnescape(headersParam)
+		if err == nil {
+			json.Unmarshal([]byte(decodedHeaders), &parsedHeaders)
 		}
 	}
 
-	return targetURL, headers, nil
+	return targetURL, parsedHeaders, nil
 }
 
-func sendError(w http.ResponseWriter, message string, statusCode int, details interface{}) {
+// sendError sends an error response
+func sendError(w http.ResponseWriter, message string, details interface{}) {
 	log.Printf("%s: %v", message, details)
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(statusCode)
+	w.WriteHeader(http.StatusInternalServerError)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"error":   message,
 		"details": details,
 	})
 }
 
-func newHTTPClient() *http.Client {
-	return &http.Client{
+// m3u8ProxyHandler handles M3U8 playlist proxying
+func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	targetURL, parsedHeaders, err := validateRequest(r)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
+
+	// Create HTTP client and request
+	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
-				return fmt.Errorf("too many redirects")
+				return fmt.Errorf("stopped after 5 redirects")
 			}
 			return nil
 		},
 	}
-}
 
-func streamRequest(w http.ResponseWriter, targetURL string, headers map[string]string, cors bool) error {
-	client := newHTTPClient()
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
-		return err
+		sendError(w, "Failed to create request", err.Error())
+		return
 	}
 
-	for k, v := range headers {
+	for k, v := range requestHeaders {
 		req.Header.Set(k, v)
 	}
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		sendError(w, "Failed to proxy m3u8 content", err.Error())
+		return
 	}
 	defer resp.Body.Close()
 
-	if cors {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Range")
-	}
-
-	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = guessContentType(targetURL)
-	}
-	w.Header().Set("Content-Type", contentType)
-
-	if cl := resp.Header.Get("Content-Length"); cl != "" {
-		w.Header().Set("Content-Length", cl)
-	}
-
-	if cr := resp.Header.Get("Content-Range"); cr != "" {
-		w.Header().Set("Content-Range", cr)
-	}
-
-	if ar := resp.Header.Get("Accept-Ranges"); ar == "" {
-		w.Header().Set("Accept-Ranges", "bytes")
-	} else {
-		w.Header().Set("Accept-Ranges", ar)
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, err = io.Copy(w, bufio.NewReader(resp.Body))
-	return err
-}
-
-func guessContentType(urlStr string) string {
-	lower := strings.ToLower(urlStr)
-	switch {
-	case strings.HasSuffix(lower, ".ts"):
-		return "video/mp2t"
-	case strings.HasSuffix(lower, ".m3u8"):
-		return "application/vnd.apple.mpegurl"
-	case regexp.MustCompile(`\.(jpe?g|png|gif|webp|bmp|svg)(?:\?|#|$)`).MatchString(lower):
-		return "image/jpeg"
-	default:
-		return "application/octet-stream"
-	}
-}
-
-func resolveURL(href, base string) string {
-	if strings.HasPrefix(href, "http") {
-		return href
-	}
-	baseURL, err := url.Parse(base)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return href
-	}
-	if strings.HasPrefix(href, "/") {
-		return baseURL.Scheme + "://" + baseURL.Host + href
-	}
-	rel, err := url.Parse(href)
-	if err != nil {
-		return href
-	}
-	return baseURL.ResolveReference(rel).String()
-}
-
-func convertURLToPath(fullURL string) string {
-	u, err := url.Parse(fullURL)
-	if err != nil {
-		return fullURL
-	}
-	return "/" + u.Host + u.Path
-}
-
-// --- Handlers ---
-
-func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
-	targetURL, parsedHeaders, err := validateRequest(r)
-	if err != nil {
-		sendError(w, err.Error(), http.StatusBadRequest, nil)
+		sendError(w, "Failed to read m3u8 content", err.Error())
 		return
 	}
 
-	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
-	body, err := fetchContent(targetURL, requestHeaders)
-	if err != nil {
-		sendError(w, "Failed to fetch m3u8 content", http.StatusBadGateway, err.Error())
-		return
-	}
-
-	lines := strings.Split(string(body), "\n")
+	m3u8Content := string(body)
+	lines := strings.Split(m3u8Content, "\n")
 	newLines := make([]string, 0, len(lines))
+
+	// Encode headers for URL parameters
 	headersJSON, _ := json.Marshal(requestHeaders)
 	encodedHeaders := url.QueryEscape(string(headersJSON))
-	uriPattern := regexp.MustCompile(`URI="([^"]+)"`)
 
 	for _, line := range lines {
 		if strings.HasPrefix(line, "#") {
+			// Handle URI in tags (e.g., encryption keys)
 			if strings.Contains(line, "URI=") {
-				matches := uriPattern.FindStringSubmatch(line)
-				if len(matches) > 1 {
-					originalURI := matches[1]
-					resolvedKeyURL := resolveURL(originalURI, targetURL)
-					newURI := fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
-						webServerURL, url.QueryEscape(resolvedKeyURL), encodedHeaders)
-					line = strings.Replace(line, originalURI, newURI, 1)
+				if start := strings.Index(line, `URI="`); start != -1 {
+					start += 5 // len(`URI="`)
+					if end := strings.Index(line[start:], `"`); end != -1 {
+						originalURI := line[start : start+end]
+						resolvedKeyURL := resolveURL(originalURI, targetURL)
+						newURI := fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
+							webServerURL,
+							url.QueryEscape(resolvedKeyURL),
+							encodedHeaders)
+						line = strings.Replace(line, originalURI, newURI, 1)
+					}
 				}
 			}
 			newLines = append(newLines, line)
 		} else if strings.TrimSpace(line) != "" {
 			resolvedURL := resolveURL(line, targetURL)
-			newURL := fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
-				webServerURL, url.QueryEscape(resolvedURL), encodedHeaders)
+			var newURL string
+			if strings.HasSuffix(line, ".m3u8") {
+				newURL = fmt.Sprintf("%s/proxy?url=%s&headers=%s",
+					webServerURL,
+					url.QueryEscape(resolvedURL),
+					encodedHeaders)
+			} else {
+				newURL = fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
+					webServerURL,
+					url.QueryEscape(resolvedURL),
+					encodedHeaders)
+			}
 			newLines = append(newLines, newURL)
 		} else {
 			newLines = append(newLines, line)
 		}
 	}
 
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Range")
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(strings.Join(newLines, "\n")))
 }
 
+// tsProxyHandler handles TS segment and general content proxying
 func tsProxyHandler(w http.ResponseWriter, r *http.Request) {
 	targetURL, parsedHeaders, err := validateRequest(r)
 	if err != nil {
-		sendError(w, err.Error(), http.StatusBadRequest, nil)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
-	err = streamRequest(w, targetURL, generateRequestHeaders(targetURL, parsedHeaders), true)
-	if err != nil {
-		log.Printf("TS proxy error: %v", err)
+
+	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after 5 redirects")
+			}
+			return nil
+		},
 	}
+
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		sendError(w, "Failed to create request", err.Error())
+		return
+	}
+
+	for k, v := range requestHeaders {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		sendError(w, "Failed to proxy segment", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	// Determine content type
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		if strings.HasSuffix(targetURL, ".ts") {
+			contentType = "video/mp2t"
+		} else if strings.HasSuffix(targetURL, ".m3u8") {
+			contentType = "application/vnd.apple.mpegurl"
+		} else if strings.Contains(targetURL, ".jpg") || strings.Contains(targetURL, ".jpeg") ||
+			strings.Contains(targetURL, ".png") || strings.Contains(targetURL, ".gif") ||
+			strings.Contains(targetURL, ".webp") || strings.Contains(targetURL, ".bmp") ||
+			strings.Contains(targetURL, ".svg") {
+			contentType = "image/jpeg"
+		} else {
+			contentType = "application/octet-stream"
+		}
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(resp.StatusCode)
+
+	io.Copy(w, resp.Body)
 }
 
+// mp4ProxyHandler handles MP4 video proxying with range support
 func mp4ProxyHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == "OPTIONS" {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Range")
-		w.WriteHeader(http.StatusOK)
-		return
-	}
-
 	targetURL, parsedHeaders, err := validateRequest(r)
 	if err != nil {
-		sendError(w, err.Error(), http.StatusBadRequest, nil)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
 
-	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+	// Forward Range header if provided by the client
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader != "" {
 		parsedHeaders["Range"] = rangeHeader
 	}
 
-	err = streamRequest(w, targetURL, generateRequestHeaders(targetURL, parsedHeaders), true)
-	if err != nil {
-		log.Printf("MP4 proxy error: %v", err)
-	}
-}
+	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
 
-func m3u8PathProxyHandler(w http.ResponseWriter, r *http.Request) {
-	domain, remaining, ok := extractDomainFromPath(r.URL.Path)
-	if !ok {
-		sendError(w, "Invalid path format", http.StatusBadRequest, nil)
-		return
-	}
-
-	targetURL := "https://" + domain + remaining
-	headers := make(map[string]string)
-	if h := r.URL.Query().Get("headers"); h != "" {
-		if decoded, err := url.QueryUnescape(h); err == nil {
-			_ = json.Unmarshal([]byte(decoded), &headers)
-		}
-	}
-
-	requestHeaders := generateBasicHeaders(headers)
-	body, err := fetchContent(targetURL, requestHeaders)
-	if err != nil {
-		sendError(w, "Failed to fetch m3u8 content", http.StatusBadGateway, err.Error())
-		return
-	}
-
-	lines := strings.Split(string(body), "\n")
-	newLines := make([]string, 0, len(lines))
-	uriPattern := regexp.MustCompile(`URI="([^"]+)"`)
-
-	for _, line := range lines {
-		if strings.HasPrefix(line, "#") && strings.Contains(line, "URI=") {
-			matches := uriPattern.FindStringSubmatch(line)
-			if len(matches) > 1 {
-				originalURI := matches[1]
-				resolvedKeyURL := resolveURL(originalURI, targetURL)
-				line = strings.Replace(line, originalURI, convertURLToPath(resolvedKeyURL), 1)
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after 5 redirects")
 			}
-		} else if strings.TrimSpace(line) != "" {
-			resolvedURL := resolveURL(line, targetURL)
-			line = convertURLToPath(resolvedURL)
-		}
-		newLines = append(newLines, line)
+			return nil
+		},
 	}
 
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		sendError(w, "Failed to create request", err.Error())
+		return
+	}
+
+	for k, v := range requestHeaders {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		sendError(w, "Failed to proxy mp4 content", err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	// Set CORS headers
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Range")
-	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(strings.Join(newLines, "\n")))
+
+	// Use upstream headers when available
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "video/mp4"
+	}
+	w.Header().Set("Content-Type", contentType)
+
+	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
+		w.Header().Set("Content-Length", contentLength)
+	}
+
+	if contentRange := resp.Header.Get("Content-Range"); contentRange != "" {
+		w.Header().Set("Content-Range", contentRange)
+	}
+
+	acceptRanges := resp.Header.Get("Accept-Ranges")
+	if acceptRanges == "" {
+		acceptRanges = "bytes"
+	}
+	w.Header().Set("Accept-Ranges", acceptRanges)
+	w.Header().Set("Content-Disposition", "inline")
+
+	w.WriteHeader(resp.StatusCode)
+
+	io.Copy(w, resp.Body)
 }
 
-func tsPathProxyHandler(w http.ResponseWriter, r *http.Request) {
-	domain, remaining, ok := extractDomainFromPath(r.URL.Path)
-	if !ok {
-		sendError(w, "Invalid path format", http.StatusBadRequest, nil)
+// fetchHandler handles generic fetch requests with optional referer
+func fetchHandler(w http.ResponseWriter, r *http.Request) {
+	targetURL := r.URL.Query().Get("url")
+	if targetURL == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "URL parameter is required"})
 		return
 	}
-	targetURL := "https://" + domain + remaining
-	headers := make(map[string]string)
-	if h := r.URL.Query().Get("headers"); h != "" {
-		if decoded, err := url.QueryUnescape(h); err == nil {
-			_ = json.Unmarshal([]byte(decoded), &headers)
-		}
+
+	referer := r.URL.Query().Get("ref")
+
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after 5 redirects")
+			}
+			return nil
+		},
 	}
 
-	err := streamRequest(w, targetURL, generateBasicHeaders(headers), true)
-	if err != nil {
-		log.Printf("TS path proxy error: %v", err)
-	}
-}
-
-// Fetch content helper for m3u8 handlers
-func fetchContent(targetURL string, headers map[string]string) ([]byte, error) {
-	client := newHTTPClient()
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
-		return nil, err
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Request failed",
+			"error":   err.Error(),
+		})
+		return
 	}
-	for k, v := range headers {
-		req.Header.Set(k, v)
+
+	if referer != "" {
+		req.Header.Set("Referer", referer)
 	}
+
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Request failed",
+			"error":   err.Error(),
+		})
+		return
 	}
 	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
+
+	if contentType := resp.Header.Get("Content-Type"); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+
+	w.WriteHeader(resp.StatusCode)
+
+	io.Copy(w, resp.Body)
+}
+
+// resolveURL resolves a relative URL against a base URL
+func resolveURL(href, base string) string {
+	baseURL, err := url.Parse(base)
+	if err != nil {
+		return href
+	}
+
+	relURL, err := url.Parse(href)
+	if err != nil {
+		return href
+	}
+
+	return baseURL.ResolveReference(relURL).String()
+}
+
+// videostrProxyHandler handles requests with videostr.net specific headers
+// URL format: http://localhost:3000/{url_without_https}
+func videostrProxyHandler(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/")
+
+	if path == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "URL path is required"})
+		return
+	}
+
+	// Construct the full URL with https://
+	targetURL := "https://" + path
+	if r.URL.RawQuery != "" {
+		targetURL += "?" + r.URL.RawQuery
+	}
+
+	// Reuse HTTP client with connection pooling
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 5 {
+				return fmt.Errorf("stopped after 5 redirects")
+			}
+			return nil
+		},
+	}
+
+	req, err := http.NewRequest("GET", targetURL, nil)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Request failed",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	// Set videostr.net specific headers
+	req.Header.Set("Referer", "https://videostr.net/")
+	req.Header.Set("Origin", "https://videostr.net/")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+	req.Header.Set("Accept", "*/*")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Request failed",
+			"error":   err.Error(),
+		})
+		return
+	}
+	defer resp.Body.Close()
+
+	contentType := resp.Header.Get("Content-Type")
+	isM3U8 := strings.Contains(contentType, "mpegurl") || strings.HasSuffix(path, ".m3u8")
+
+	if isM3U8 {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		lines := strings.Split(string(body), "\n")
+		newLines := make([]string, 0, len(lines))
+
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(line, "#") {
+				if strings.Contains(line, "URI=") {
+					if start := strings.Index(line, `URI="`); start != -1 {
+						start += 5
+						if end := strings.Index(line[start:], `"`); end != -1 {
+							originalURI := line[start : start+end]
+							resolvedKeyURL := resolveURL(originalURI, targetURL)
+							proxyPath := strings.TrimPrefix(strings.TrimPrefix(resolvedKeyURL, "https://"), "http://")
+							newURI := webServerURL + "/" + proxyPath
+							line = strings.Replace(line, originalURI, newURI, 1)
+						}
+					}
+				}
+				newLines = append(newLines, line)
+			} else if trimmed != "" {
+				resolvedURL := resolveURL(line, targetURL)
+				proxyPath := strings.TrimPrefix(strings.TrimPrefix(resolvedURL, "https://"), "http://")
+				newLines = append(newLines, webServerURL+"/"+proxyPath)
+			} else {
+				newLines = append(newLines, line)
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Write([]byte(strings.Join(newLines, "\n")))
+	} else {
+		// Stream non-M3U8 content directly
+		if contentType != "" {
+			w.Header().Set("Content-Type", contentType)
+		}
+		if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
+			w.Header().Set("Content-Length", contentLength)
+		}
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}
 }

@@ -11,14 +11,19 @@
 # Output of the go coverage tool
 *.out
 
-# Dependency directories
-vendor/
-
 # Go workspace file
 go.work
 
+# Dependency directories
+vendor/
+
+# Build output
+proxy-server
+go-proxy
+
 # Environment variables
-.env
+.env.local
+.env.production
 
 # IDE
 .vscode/
@@ -30,7 +35,3 @@ go.work
 # OS
 .DS_Store
 Thumbs.db
-
-# Build output
-proxy-server
-proxy-server.exe

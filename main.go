@@ -7,73 +7,121 @@ import (
 	"os"
 	"strings"
 
-	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
 )
 
-var webServerURL string
+var (
+	webServerURL   string
+	allowedOrigins []string
+)
 
 func main() {
-	// Load .env file if it exists
-	_ = godotenv.Load()
-
-	// Get server configuration
-	host := getEnv("HOST", "localhost")
-	port := getEnv("PORT", "3000")
-	publicURL := os.Getenv("PUBLIC_URL")
-
-	if publicURL != "" {
-		webServerURL = publicURL
-	} else {
-		webServerURL = fmt.Sprintf("http://%s:%s", host, port)
+	// Load .env file
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using environment variables")
 	}
 
-	// Create router
-	r := mux.NewRouter()
+	// Get configuration from environment
+	host := getEnv("HOST", "localhost")
+	port := getEnv("PORT", "3000")
+	publicURL := getEnv("PUBLIC_URL", fmt.Sprintf("http://%s:%s", host, port))
+	webServerURL = publicURL
 
-	// Register routes
-	r.HandleFunc("/proxy", m3u8ProxyHandler).Methods("GET")
-	r.HandleFunc("/ts-proxy", tsProxyHandler).Methods("GET")
-	r.HandleFunc("/mp4-proxy", mp4ProxyHandler).Methods("GET", "OPTIONS")
-
-	// Health check
-	r.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("OK"))
-	}).Methods("GET")
-
-	// Catch-all route for path-based format (must be last)
-	// Handles URLs like: /domain:port/path/to/file.m3u8
-	r.PathPrefix("/").HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Handle OPTIONS for CORS preflight
-		if r.Method == "OPTIONS" {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Range")
-			w.WriteHeader(http.StatusOK)
-			return
+	// Parse allowed origins
+	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
+	if allowedOriginsStr != "" {
+		allowedOrigins = strings.Split(allowedOriginsStr, ",")
+		for i := range allowedOrigins {
+			allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
 		}
-		
-		// Check if path contains a domain-like pattern
-		if strings.Contains(r.URL.Path, ".") {
-			// Determine handler based on file extension
-			if strings.Contains(r.URL.Path, ".m3u8") {
-				m3u8PathProxyHandler(w, r)
-			} else {
-				tsPathProxyHandler(w, r)
-			}
-		} else {
-			http.NotFound(w, r)
-		}
-	}).Methods("GET", "OPTIONS")
+	}
+
+	// Setup routes with custom handler
+	http.HandleFunc("/", routeHandler)
 
 	// Start server
 	addr := fmt.Sprintf("%s:%s", host, port)
-	log.Printf("Starting proxy server on %s", addr)
-	log.Printf("Public URL: %s", webServerURL)
+	log.Printf("M3U8 Proxy Server running at http://%s", addr)
+	if len(allowedOrigins) > 0 {
+		log.Printf("Allowed origins: %s", strings.Join(allowedOrigins, ", "))
+	} else {
+		log.Println("Allowed origins: All (*)")
+	}
 
-	if err := http.ListenAndServe(addr, r); err != nil {
+	if err := http.ListenAndServe(addr, nil); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func routeHandler(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+
+	// Route to specific handlers based on path
+	switch {
+	case path == "/":
+		homeHandler(w, r)
+	case path == "/proxy":
+		corsMiddleware(m3u8ProxyHandler)(w, r)
+	case path == "/ts-proxy":
+		corsMiddleware(tsProxyHandler)(w, r)
+	case path == "/mp4-proxy":
+		corsMiddleware(mp4ProxyHandler)(w, r)
+	case path == "/fetch":
+		corsMiddleware(fetchHandler)(w, r)
+	default:
+		// Catch-all: treat as videostr proxy (URL without https://)
+		corsMiddleware(videostrProxyHandler)(w, r)
+	}
+}
+
+func homeHandler(w http.ResponseWriter, r *http.Request) {
+	corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		
+		allowedOriginsDisplay := "All (*)"
+		if len(allowedOrigins) > 0 {
+			allowedOriginsDisplay = strings.Join(allowedOrigins, ", ")
+		}
+		
+		response := fmt.Sprintf(`{
+  "message": "M3U8 Cross-Origin Proxy Server",
+  "endpoints": {
+    "m3u8": "/proxy?url={m3u8_url}&headers={optional_headers}",
+    "ts": "/ts-proxy?url={ts_segment_url}&headers={optional_headers}",
+    "fetch": "/fetch?url={any_url}&ref={optional_referer}",
+    "mp4": "/mp4-proxy?url={mp4_url}&headers={optional_headers}",
+    "videostr": "/{url_without_https} (with videostr.net headers)"
+  },
+  "allowedOrigins": "%s"
+}`, allowedOriginsDisplay)
+		
+		w.Write([]byte(response))
+	})(w, r)
+}
+
+func corsMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		origin := r.Header.Get("Origin")
+
+		// If no allowed origins are specified, allow all (*)
+		if len(allowedOrigins) == 0 {
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+		} else if origin != "" && contains(allowedOrigins, origin) {
+			// If allowed origins are specified, check if the request origin is in the list
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
+
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, Range")
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
+
+		// Handle preflight requests
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next(w, r)
 	}
 }
 
@@ -82,4 +130,13 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }

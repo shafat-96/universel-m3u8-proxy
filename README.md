@@ -1,270 +1,154 @@
-# Go Proxy Server
+# M3U8 Cross-Origin Proxy Server (Go)
 
-A high-performance proxy server written in Go for handling HLS streams (m3u8/ts) and MP4 video content with proper header forwarding and CORS support.
+A high-performance proxy server written in Go for handling M3U8 playlists, TS segments, MP4 videos, and general content with CORS support.
 
 ## Features
 
-- **M3U8 Proxy** (`/proxy`): Proxies HLS playlists and rewrites segment URLs
-- **TS Proxy** (`/ts-proxy`): Proxies video segments, encryption keys, and other resources
-- **MP4 Proxy** (`/mp4-proxy`): Proxies MP4 videos with range request support
-- **Path-Based Proxy**: Direct domain-in-path format for simplified usage
-- **Header Management**: Automatic header generation based on domain templates
-- **CORS Support**: Full CORS support on all endpoints with `Access-Control-Allow-Origin: *`
-- **Range Requests**: Support for partial content delivery (HTTP 206)
-- **Custom Headers**: Pass custom headers via URL-encoded JSON parameter
-
-📖 **[View Complete API Reference](API_REFERENCE.md)** for detailed endpoint documentation and examples.
+- **M3U8 Playlist Proxying**: Rewrites M3U8 playlists to proxy all segments and encryption keys
+- **TS Segment Proxying**: Handles video segments with proper content types
+- **MP4 Video Proxying**: Supports range requests for video streaming
+- **Generic Fetch**: Proxy any content with optional referer header
+- **CORS Support**: Configurable allowed origins
+- **Domain-Specific Headers**: Automatically generates appropriate headers based on target domain
 
 ## Installation
 
-1. Clone or navigate to the repository:
-```bash
-cd E:\do\serrver\no\proxy\go-proxy
-```
-
+1. Clone or download this repository
 2. Install dependencies:
 ```bash
 go mod download
 ```
 
-3. Create a `.env` file (optional):
-```bash
-cp .env.example .env
-```
-
 ## Configuration
 
-Configure the server using environment variables:
+Create or edit the `.env` file:
 
-- `HOST`: Server host (default: `localhost`)
-- `PORT`: Server port (default: `3000`)
-- `PUBLIC_URL`: Public URL for the server (optional, defaults to `http://HOST:PORT`)
+```env
+PUBLIC_URL=http://localhost:3000
+HOST=localhost
+PORT=3000
+# ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3001
+```
 
-## Usage
+- `PUBLIC_URL`: The public URL of your proxy server
+- `HOST`: Host to bind the server to
+- `PORT`: Port to run the server on
+- `ALLOWED_ORIGINS`: Comma-separated list of allowed origins (leave commented for all origins)
 
-### Running the Server
+## Running the Server
 
+### Development
 ```bash
 go run .
 ```
 
-Or build and run:
-
+### Build and Run
 ```bash
 go build -o proxy-server
 ./proxy-server
 ```
 
-### API Endpoints
-
-#### Path-Based Format (Recommended)
-
-The proxy supports a simplified path-based format where the domain is embedded in the URL path. This format **does not add custom Referer/Origin headers**, making it suitable for CDNs that don't require them.
-
-**Format:** `/{domain:port}/{path/to/file}`
-
-**Examples:**
-```
-GET /f3.megacdn.co:2228/v3-hls-playback/.../playlist.m3u8
-GET /rainflare53.pro/file2/.../segment.ts
+### Using Docker
+```bash
+docker build -t go-proxy .
+docker run -p 3000:3000 --env-file .env go-proxy
 ```
 
-The proxy automatically:
-- Detects `.m3u8` files and processes them as playlists
-- Rewrites all URLs in playlists to use the same path-based format
-- Handles all other files as regular segments/resources
+## API Endpoints
 
-#### 1. M3U8 Proxy - `/proxy`
-
-Proxies HLS playlists with custom headers and rewrites all URLs to go through the proxy.
-
-**Parameters:**
-- `url` (required): The URL of the m3u8 playlist
-- `headers` (optional): JSON-encoded headers to forward
-
-**Example:**
+### 1. M3U8 Proxy
 ```
-GET /proxy?url=https://example.com/playlist.m3u8
+GET /proxy?url={m3u8_url}&headers={optional_headers}
 ```
+Proxies M3U8 playlists and rewrites all URLs to go through the proxy.
 
-**Note:** This endpoint adds domain-specific Referer/Origin headers (e.g., `https://videostr.net/` for videostr domains).
-
-#### 2. TS Proxy - `/ts-proxy`
-
-Proxies video segments, encryption keys, and other resources.
-
-**Parameters:**
-- `url` (required): The URL of the resource
-- `headers` (optional): JSON-encoded headers to forward
-
-**Example:**
+### 2. TS Segment Proxy
 ```
-GET /ts-proxy?url=https://example.com/segment.ts
+GET /ts-proxy?url={ts_segment_url}&headers={optional_headers}
 ```
+Proxies video segments, encryption keys, and other media files.
 
-#### 3. MP4 Proxy - `/mp4-proxy`
-
-Proxies MP4 videos with support for range requests.
-
-**Parameters:**
-- `url` (required): The URL of the MP4 video
-- `headers` (optional): JSON-encoded headers to forward
-
-**Example:**
+### 3. MP4 Proxy
 ```
-GET /mp4-proxy?url=https://example.com/video.mp4
+GET /mp4-proxy?url={mp4_url}&headers={optional_headers}
 ```
+Proxies MP4 videos with support for range requests (seeking).
 
-**Range Request Example:**
+### 4. Generic Fetch
 ```
-GET /mp4-proxy?url=https://example.com/video.mp4
-Range: bytes=0-1023
+GET /fetch?url={any_url}&ref={optional_referer}
 ```
+Proxies any content with an optional referer header.
 
-#### 4. Health Check - `/health`
-
-Returns server health status.
-
-**Example:**
+### 5. Videostr Proxy (Catch-all)
 ```
-GET /health
+GET /{url_without_https}
 ```
+Proxies any URL without the `https://` prefix. Automatically adds videostr.net specific headers:
+- `Referer: https://videostr.net/`
+- `Origin: https://videostr.net/`
 
-### Custom Headers
+**Example**: `http://localhost:3000/example.com/video.m3u8` will proxy `https://example.com/video.m3u8`
 
-You can pass custom headers as a URL-encoded JSON string using the `headers` query parameter:
+## Usage Examples
 
-**Format:** `&headers={url_encoded_json}`
-
-**JavaScript Example:**
+### Proxying an M3U8 Playlist
 ```javascript
-const headers = {
-  "Authorization": "Bearer token",
-  "Custom-Header": "value",
-  "Referer": "https://example.com/"
-};
-const encodedHeaders = encodeURIComponent(JSON.stringify(headers));
-const url = `/proxy?url=https://example.com/playlist.m3u8&headers=${encodedHeaders}`;
+const proxyUrl = 'http://localhost:3000/proxy';
+const m3u8Url = 'https://example.com/playlist.m3u8';
+const headers = { 'Authorization': 'Bearer token' };
+
+const url = `${proxyUrl}?url=${encodeURIComponent(m3u8Url)}&headers=${encodeURIComponent(JSON.stringify(headers))}`;
+
+// Use this URL in your video player
 ```
 
-**Direct URL Example:**
-```
-/proxy?url=https://example.com/video.m3u8&headers=%7B%22Referer%22%3A%22https%3A%2F%2Fexample.com%2F%22%7D
+### Proxying an MP4 Video
+```javascript
+const proxyUrl = 'http://localhost:3000/mp4-proxy';
+const mp4Url = 'https://example.com/video.mp4';
+
+const url = `${proxyUrl}?url=${encodeURIComponent(mp4Url)}`;
+
+// Use this URL in your video player
 ```
 
-**Note:** Custom headers in the `headers` parameter will override the default headers generated by the proxy.
+### Using the Fetch Endpoint
+```javascript
+const proxyUrl = 'http://localhost:3000/fetch';
+const imageUrl = 'https://example.com/image.jpg';
+const referer = 'https://example.com';
+
+const url = `${proxyUrl}?url=${encodeURIComponent(imageUrl)}&ref=${encodeURIComponent(referer)}`;
+```
+
+### Using the Videostr Proxy (Catch-all)
+```javascript
+// For URLs that need videostr.net headers
+const videoUrl = 'example.com/path/to/video.m3u8';
+const proxyUrl = `http://localhost:3000/${videoUrl}`;
+
+// This will automatically add:
+// - Referer: https://videostr.net/
+// - Origin: https://videostr.net/
+// And proxy: https://example.com/path/to/video.m3u8
+```
 
 ## How It Works
 
-### M3U8 Proxy Flow
+1. **Request Validation**: Validates the target URL and optional headers
+2. **Header Generation**: Generates appropriate headers based on the target domain
+3. **Content Fetching**: Fetches content from the target URL
+4. **Content Rewriting** (for M3U8): Rewrites all URLs in playlists to go through the proxy
+5. **Response Streaming**: Streams the content back to the client with proper headers
 
-1. Fetches the m3u8 playlist from the target URL
-2. Parses the playlist line by line
-3. Rewrites segment URLs and encryption key URIs to go through the proxy
-4. Returns the modified playlist
+## Security Considerations
 
-### TS Proxy Flow
-
-1. Fetches the resource (segment, key, etc.) from the target URL
-2. Determines appropriate content type
-3. Streams the content to the client
-
-### MP4 Proxy Flow
-
-1. Forwards range headers from the client
-2. Fetches the MP4 content (full or partial)
-3. Forwards response headers (Content-Range, Accept-Ranges, etc.)
-4. Streams the content to the client
-
-## Header Management
-
-The proxy automatically generates appropriate headers based on the target domain:
-
-- **Videostr.net domains**: For URLs containing `1hd.su`, `rainflare`, `lightbeam`, or `videostr`, automatically sets:
-  - `Referer: https://videostr.net/`
-  - `Origin: https://videostr.net`
-- **Other domains**: Uses the target domain as Referer/Origin
-- Includes modern browser headers (User-Agent, Accept, Sec-Fetch-*, etc.)
-
-### URL Resolution
-
-The proxy intelligently handles different URL formats:
-
-1. **Full URLs**: `https://example.com/path` → Used as-is
-2. **Absolute paths with domain**: `/rainflare53.pro/file/...` → Converted to `https://rainflare53.pro/file/...`
-3. **Relative paths**: `segment.ts` → Resolved against the base URL
-
-This allows the proxy to handle complex CDN setups where playlists reference segments on different domains.
-
-## Development
-
-### Project Structure
-
-```
-go-proxy/
-├── main.go         # Server setup and routing
-├── handlers.go     # Proxy handler implementations
-├── headers.go      # Header generation logic
-├── go.mod          # Go module definition
-├── .env.example    # Environment variable template
-├── .gitignore      # Git ignore rules
-├── Dockerfile      # Docker configuration
-├── start.bat       # Windows start script
-└── README.md       # Documentation
-```
-
-### Adding Custom Domain Headers
-
-Edit `headers.go` in the `getHeaderConfig` function to add custom header logic for specific domains:
-
-```go
-videostrDomains := []string{
-    "1hd.su",
-    "rainflare",
-    "lightbeam",
-    "videostr",
-    "yourdomain", // Add your domain here
-}
-```
-
-Or create a custom HeaderConfig for specific domains:
-
-```go
-if strings.Contains(domain, "yourdomain") {
-    return HeaderConfig{
-        Referer: "https://yourdomain.com/",
-        Origin:  "https://yourdomain.com",
-    }
-}
-```
-
-## Error Handling
-
-The proxy returns JSON error responses:
-
-```json
-{
-  "error": "Error message",
-  "details": "Additional details"
-}
-```
-
-Common status codes:
-- `400`: Bad Request (missing URL parameter)
-- `500`: Internal Server Error
-- `502`: Bad Gateway (upstream fetch failed)
-
-## Performance
-
-- Efficient streaming with `io.Copy`
-- Minimal memory footprint
-- Concurrent request handling with Go's goroutines
-- Connection pooling via `http.Client`
+- Configure `ALLOWED_ORIGINS` to restrict which domains can use your proxy
+- Consider adding authentication if deploying publicly
+- Monitor usage to prevent abuse
+- Use HTTPS in production
 
 ## License
 
 MIT
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
