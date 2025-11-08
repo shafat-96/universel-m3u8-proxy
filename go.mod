@@ -1,5 +1,8 @@
-module go-proxy
+module github.com/yourusername/go-proxy
 
 go 1.21
 
-require github.com/joho/godotenv v1.5.1
+require (
+	github.com/gorilla/mux v1.8.1
+	github.com/joho/godotenv v1.5.1
+)

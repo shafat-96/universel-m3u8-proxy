@@ -1,13 +1,11 @@
-# Binaries
+# Binaries for programs and plugins
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-proxy-server
-go-proxy
 
-# Test binary
+# Test binary, built with `go test -c`
 *.test
 
 # Output of the go coverage tool
@@ -32,3 +30,7 @@ go.work
 # OS
 .DS_Store
 Thumbs.db
+
+# Build output
+proxy-server
+proxy-server.exe

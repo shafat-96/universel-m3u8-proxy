@@ -1,33 +1,30 @@
-# Stage 1: Build
-FROM golang:1.22-alpine AS builder
+# Build stage
+FROM golang:1.21-alpine AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Copy go mod and sum files
-COPY go.mod go.sum ./
-
-# Download dependencies
+# Copy go mod files
+COPY go.mod go.sum* ./
 RUN go mod download
 
-# Copy the entire project
+# Copy source code
 COPY . .
 
-# Build the Go binary
-RUN go build -o proxy-server .
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o proxy-server .
 
-# Stage 2: Run
+# Final stage
 FROM alpine:latest
 
-# Set working directory
-WORKDIR /app
+RUN apk --no-cache add ca-certificates
 
-# Copy binary and environment file example
+WORKDIR /root/
+
+# Copy the binary from builder
 COPY --from=builder /app/proxy-server .
-COPY .env.example .env
 
-# Expose the port
+# Expose port
 EXPOSE 3000
 
-# Start the server
+# Run the application
 CMD ["./proxy-server"]
