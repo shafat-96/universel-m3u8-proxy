@@ -85,30 +85,27 @@ func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, p
 	lines := strings.Split(m3u8Content, "\n")
 	newLines := make([]string, 0, len(lines))
 
-	// Extract base path from original path (everything before the filename)
-	basePath := ""
-	if lastSlash := strings.LastIndex(originalPath, "/"); lastSlash != -1 {
-		basePath = originalPath[:lastSlash+1]
-	}
-
-	// Encode headers and host for URL (cache to avoid redundant encoding)
+	// Encode headers for URL (cache to avoid redundant encoding)
 	encodedHeaders, _ := json.Marshal(headers)
 	headersParam := url.QueryEscape(string(encodedHeaders))
 	encodedHost := url.QueryEscape(host)
 
 	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+
+		if strings.HasPrefix(trimmed, "#") {
 			// Handle key URIs in #EXT-X-KEY lines
-			if strings.Contains(line, "URI=") {
-				newLines = append(newLines, processFileKeyURI(line, encodedHost, basePath, prefix, headersParam))
+			if strings.Contains(trimmed, "URI=") {
+				newLines = append(newLines, processFileKeyURI(trimmed, targetURL, encodedHost, prefix, headersParam))
 			} else {
-				newLines = append(newLines, line)
+				newLines = append(newLines, trimmed)
 			}
-		} else if strings.TrimSpace(line) != "" {
-			// Handle segment URLs
-			newLines = append(newLines, processFileSegmentURL(line, encodedHost, basePath, prefix, headersParam))
 		} else {
-			newLines = append(newLines, line)
+			// Handle segment URLs - resolve against base URL
+			newLines = append(newLines, processFileSegmentURL(trimmed, targetURL, encodedHost, prefix, headersParam))
 		}
 	}
 
@@ -142,7 +139,7 @@ func handleFileSegmentProxy(w http.ResponseWriter, targetURL string, headers map
 }
 
 // processFileKeyURI processes encryption key URIs in M3U8 playlists with dynamic prefix
-func processFileKeyURI(line, encodedHost, basePath, prefix, headersParam string) string {
+func processFileKeyURI(line, baseURL, encodedHost, prefix, headersParam string) string {
 	// Extract URI from the line
 	start := strings.Index(line, `URI="`)
 	if start == -1 {
@@ -157,59 +154,42 @@ func processFileKeyURI(line, encodedHost, basePath, prefix, headersParam string)
 
 	originalURI := line[start : start+end]
 
-	// Build the new proxy URI
-	var newURI string
-	if strings.HasPrefix(originalURI, "http://") || strings.HasPrefix(originalURI, "https://") {
-		// Absolute URL - extract path (don't re-encode, already encoded)
-		if parsed, err := url.Parse(originalURI); err == nil {
-			newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
-				webServerURL,
-				prefix,
-				parsed.Path,
-				encodedHost,
-				headersParam)
-		} else {
-			return line
-		}
-	} else {
-		// Relative URL (don't encode, already encoded in M3U8)
-		keyPath := basePath + originalURI
-		newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
-			webServerURL,
-			prefix,
-			keyPath,
-			encodedHost,
-			headersParam)
+	// Resolve relative URL against base URL (like Node.js new URL())
+	resolvedURL := resolveURL(baseURL, originalURI)
+	
+	// Parse to extract path
+	parsed, err := url.Parse(resolvedURL)
+	if err != nil {
+		return line
 	}
+
+	// Build proxy URL with the resolved path
+	newURI := fmt.Sprintf("%s%s%s?host=%s&headers=%s",
+		webServerURL,
+		prefix,
+		parsed.Path,
+		encodedHost,
+		headersParam)
 
 	return strings.Replace(line, originalURI, newURI, 1)
 }
 
 // processFileSegmentURL processes segment URLs in M3U8 playlists with dynamic prefix
-func processFileSegmentURL(line, encodedHost, basePath, prefix, headersParam string) string {
-	trimmedLine := strings.TrimSpace(line)
-
-	// Check if it's an absolute URL
-	if strings.HasPrefix(trimmedLine, "http://") || strings.HasPrefix(trimmedLine, "https://") {
-		// Extract path from absolute URL
-		if parsed, err := url.Parse(trimmedLine); err == nil {
-			// Don't re-encode the path, it's already properly encoded
-			return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
-				webServerURL,
-				prefix,
-				parsed.Path,
-				encodedHost,
-				headersParam)
-		}
+func processFileSegmentURL(line, baseURL, encodedHost, prefix, headersParam string) string {
+	// Resolve relative URL against base URL (like Node.js new URL())
+	resolvedURL := resolveURL(baseURL, line)
+	
+	// Parse to extract path
+	parsed, err := url.Parse(resolvedURL)
+	if err != nil {
 		return line
 	}
 
-	// Relative URL - combine with base path (don't encode, already encoded in M3U8)
-	segmentPath := basePath + trimmedLine
+	// Build proxy URL with the resolved path
 	return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 		webServerURL,
 		prefix,
-		segmentPath,
+		parsed.Path,
 		encodedHost,
 		headersParam)
 }
