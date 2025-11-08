@@ -40,15 +40,20 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Properly resolve target URL to avoid double slashes
-	base, err := url.Parse(host)
-	if err != nil {
-		sendError(w, http.StatusBadRequest, "Invalid host URL", err.Error())
-		return
+	// Construct the full target URL
+	// Ensure host doesn't end with slash and path starts with slash
+	hostTrimmed := strings.TrimSuffix(host, "/")
+	pathWithSlash := decodedPath
+	if !strings.HasPrefix(pathWithSlash, "/") {
+		pathWithSlash = "/" + pathWithSlash
 	}
-	targetURL, err := base.Parse(decodedPath)
+	
+	targetURLString := hostTrimmed + pathWithSlash
+	
+	// Parse to validate the URL
+	targetURL, err := url.Parse(targetURLString)
 	if err != nil {
-		sendError(w, http.StatusBadRequest, "Failed to parse target URL", err.Error())
+		sendError(w, http.StatusBadRequest, "Failed to construct target URL", err.Error())
 		return
 	}
 
