@@ -20,17 +20,17 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 	
 	prefix := "/" + pathParts[0] + "/"
 	path := pathParts[1]
-	
-	if path == "" {
-		sendError(w, http.StatusBadRequest, "Invalid file proxy path", nil)
-		return
-	}
 
 	// URL-decode the path to handle encoded filenames
 	decodedPath, err := url.PathUnescape(path)
 	if err != nil {
 		// If decoding fails, use the original path
 		decodedPath = path
+	}
+	
+	if decodedPath == "" {
+		sendError(w, http.StatusBadRequest, "Invalid file proxy path", nil)
+		return
 	}
 
 	// Get host parameter (required)
@@ -47,7 +47,9 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 	if headersParam != "" {
 		decodedHeaders, err := url.QueryUnescape(headersParam)
 		if err == nil {
-			json.Unmarshal([]byte(decodedHeaders), &parsedHeaders)
+			if err := json.Unmarshal([]byte(decodedHeaders), &parsedHeaders); err != nil {
+				log.Printf("Failed to parse headers JSON: %v", err)
+			}
 		}
 	}
 
@@ -89,21 +91,22 @@ func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, p
 		basePath = originalPath[:lastSlash+1]
 	}
 
-	// Encode headers for URL
+	// Encode headers and host for URL (cache to avoid redundant encoding)
 	encodedHeaders, _ := json.Marshal(headers)
 	headersParam := url.QueryEscape(string(encodedHeaders))
+	encodedHost := url.QueryEscape(host)
 
 	for _, line := range lines {
 		if strings.HasPrefix(line, "#") {
 			// Handle key URIs in #EXT-X-KEY lines
 			if strings.Contains(line, "URI=") {
-				newLines = append(newLines, processFileKeyURI(line, host, basePath, prefix, headersParam))
+				newLines = append(newLines, processFileKeyURI(line, encodedHost, basePath, prefix, headersParam))
 			} else {
 				newLines = append(newLines, line)
 			}
 		} else if strings.TrimSpace(line) != "" {
 			// Handle segment URLs
-			newLines = append(newLines, processFileSegmentURL(line, host, basePath, prefix, headersParam))
+			newLines = append(newLines, processFileSegmentURL(line, encodedHost, basePath, prefix, headersParam))
 		} else {
 			newLines = append(newLines, line)
 		}
@@ -139,7 +142,7 @@ func handleFileSegmentProxy(w http.ResponseWriter, targetURL string, headers map
 }
 
 // processFileKeyURI processes encryption key URIs in M3U8 playlists with dynamic prefix
-func processFileKeyURI(line, host, basePath, prefix, headersParam string) string {
+func processFileKeyURI(line, encodedHost, basePath, prefix, headersParam string) string {
 	// Extract URI from the line
 	start := strings.Index(line, `URI="`)
 	if start == -1 {
@@ -164,7 +167,7 @@ func processFileKeyURI(line, host, basePath, prefix, headersParam string) string
 				webServerURL,
 				prefix,
 				encodedPath,
-				url.QueryEscape(host),
+				encodedHost,
 				headersParam)
 		} else {
 			return line
@@ -177,7 +180,7 @@ func processFileKeyURI(line, host, basePath, prefix, headersParam string) string
 			webServerURL,
 			prefix,
 			encodedKey,
-			url.QueryEscape(host),
+			encodedHost,
 			headersParam)
 	}
 
@@ -185,7 +188,7 @@ func processFileKeyURI(line, host, basePath, prefix, headersParam string) string
 }
 
 // processFileSegmentURL processes segment URLs in M3U8 playlists with dynamic prefix
-func processFileSegmentURL(line, host, basePath, prefix, headersParam string) string {
+func processFileSegmentURL(line, encodedHost, basePath, prefix, headersParam string) string {
 	trimmedLine := strings.TrimSpace(line)
 
 	// Check if it's an absolute URL
@@ -198,7 +201,7 @@ func processFileSegmentURL(line, host, basePath, prefix, headersParam string) st
 				webServerURL,
 				prefix,
 				encodedPath,
-				url.QueryEscape(host),
+				encodedHost,
 				headersParam)
 		}
 		return line
@@ -211,6 +214,6 @@ func processFileSegmentURL(line, host, basePath, prefix, headersParam string) st
 		webServerURL,
 		prefix,
 		encodedSegment,
-		url.QueryEscape(host),
+		encodedHost,
 		headersParam)
 }
