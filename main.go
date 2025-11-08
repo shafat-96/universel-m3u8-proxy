@@ -98,8 +98,8 @@ func smartRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check for file1 prefix
-	if strings.HasPrefix(path, "/file1/") {
+	// Check for file prefix patterns (/file1/, /file2/, /file3/, etc.)
+	if strings.HasPrefix(path, "/file") && len(path) > 6 && path[6] == '/' {
 		fileProxyHandler(w, r)
 		return
 	}
@@ -129,7 +129,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
     "ts": "/ts-proxy?url={ts_segment_url}&headers={optional_headers}",
     "fetch": "/fetch?url={any_url}&ref={optional_referer}",
     "mp4": "/mp4-proxy?url={mp4_url}&headers={optional_headers}",
-    "file1": "/file1/{path}?host={host_url}&headers={optional_headers}",
+    "file": "/file1/{path}?host={host_url}&headers={optional_headers} (also supports /file2/, /file3/, etc.)",
     "universal-hls": "ANY_PATH?host={host_url}&headers={optional_headers}",
     "note": "Universal HLS proxy works with ANY path pattern when 'host' parameter is present"
   },

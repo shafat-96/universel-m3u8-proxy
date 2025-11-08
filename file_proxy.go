@@ -11,11 +11,22 @@ import (
 )
 
 func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/file1/")
-	if path == "" || path == r.URL.Path {
-		sendError(w, http.StatusBadRequest, "Invalid file1 proxy path", nil)
+	// Detect the prefix pattern (e.g., /file1/, /file2/, /file3/)
+	pathParts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/"), "/", 2)
+	if len(pathParts) < 2 {
+		sendError(w, http.StatusBadRequest, "Invalid file proxy path", nil)
 		return
 	}
+	
+	prefix := "/" + pathParts[0] + "/"
+	path := pathParts[1]
+	
+	if path == "" {
+		sendError(w, http.StatusBadRequest, "Invalid file proxy path", nil)
+		return
+	}
+
+	// Get host parameter (required)
 	host := r.URL.Query().Get("host")
 	if host == "" {
 		sendError(w, http.StatusBadRequest, "host parameter is required", nil)
@@ -38,14 +49,14 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 	isM3U8 := strings.HasSuffix(strings.ToLower(path), ".m3u8")
 
 	if isM3U8 {
-		handleFileM3U8Proxy(w, targetURL, host, path, requestHeaders)
+		handleFileM3U8Proxy(w, targetURL, host, path, prefix, requestHeaders)
 	} else {
 		// Handle regular file (TS segments, etc.)
 		handleFileSegmentProxy(w, targetURL, requestHeaders)
 	}
 }
 
-func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath string, headers map[string]string) {
+func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, prefix string, headers map[string]string) {
 	// Fetch the M3U8 content
 	resp, err := makeRequest(targetURL, headers, nil)
 	if err != nil {
@@ -79,13 +90,13 @@ func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath st
 		if strings.HasPrefix(line, "#") {
 			// Handle key URIs in #EXT-X-KEY lines
 			if strings.Contains(line, "URI=") {
-				newLines = append(newLines, processFileKeyURI(line, host, basePath, headersParam))
+				newLines = append(newLines, processFileKeyURI(line, host, basePath, prefix, headersParam))
 			} else {
 				newLines = append(newLines, line)
 			}
 		} else if strings.TrimSpace(line) != "" {
 			// Handle segment URLs
-			newLines = append(newLines, processFileSegmentURL(line, host, basePath, headersParam))
+			newLines = append(newLines, processFileSegmentURL(line, host, basePath, prefix, headersParam))
 		} else {
 			newLines = append(newLines, line)
 		}
@@ -120,8 +131,8 @@ func handleFileSegmentProxy(w http.ResponseWriter, targetURL string, headers map
 	}
 }
 
-// processFileKeyURI processes encryption key URIs in M3U8 playlists
-func processFileKeyURI(line, host, basePath, headersParam string) string {
+// processFileKeyURI processes encryption key URIs in M3U8 playlists with dynamic prefix
+func processFileKeyURI(line, host, basePath, prefix, headersParam string) string {
 	// Extract URI from the line
 	start := strings.Index(line, `URI="`)
 	if start == -1 {
@@ -141,8 +152,9 @@ func processFileKeyURI(line, host, basePath, headersParam string) string {
 	if strings.HasPrefix(originalURI, "http://") || strings.HasPrefix(originalURI, "https://") {
 		// Absolute URL - extract path
 		if parsed, err := url.Parse(originalURI); err == nil {
-			newURI = fmt.Sprintf("%s/file1%s?host=%s&headers=%s",
+			newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 				webServerURL,
+				prefix,
 				parsed.Path,
 				url.QueryEscape(host),
 				headersParam)
@@ -151,8 +163,9 @@ func processFileKeyURI(line, host, basePath, headersParam string) string {
 		}
 	} else {
 		// Relative URL
-		newURI = fmt.Sprintf("%s/file1/%s%s?host=%s&headers=%s",
+		newURI = fmt.Sprintf("%s%s%s%s?host=%s&headers=%s",
 			webServerURL,
+			prefix,
 			basePath,
 			originalURI,
 			url.QueryEscape(host),
@@ -162,16 +175,17 @@ func processFileKeyURI(line, host, basePath, headersParam string) string {
 	return strings.Replace(line, originalURI, newURI, 1)
 }
 
-// processFileSegmentURL processes segment URLs in M3U8 playlists
-func processFileSegmentURL(line, host, basePath, headersParam string) string {
+// processFileSegmentURL processes segment URLs in M3U8 playlists with dynamic prefix
+func processFileSegmentURL(line, host, basePath, prefix, headersParam string) string {
 	trimmedLine := strings.TrimSpace(line)
 
 	// Check if it's an absolute URL
 	if strings.HasPrefix(trimmedLine, "http://") || strings.HasPrefix(trimmedLine, "https://") {
 		// Extract path from absolute URL
 		if parsed, err := url.Parse(trimmedLine); err == nil {
-			return fmt.Sprintf("%s/file1%s?host=%s&headers=%s",
+			return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 				webServerURL,
+				prefix,
 				parsed.Path,
 				url.QueryEscape(host),
 				headersParam)
@@ -180,8 +194,9 @@ func processFileSegmentURL(line, host, basePath, headersParam string) string {
 	}
 
 	// Relative URL - combine with base path
-	return fmt.Sprintf("%s/file1/%s%s?host=%s&headers=%s",
+	return fmt.Sprintf("%s%s%s%s?host=%s&headers=%s",
 		webServerURL,
+		prefix,
 		basePath,
 		trimmedLine,
 		url.QueryEscape(host),
