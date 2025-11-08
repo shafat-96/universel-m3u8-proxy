@@ -26,6 +26,13 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// URL-decode the path to handle encoded filenames
+	decodedPath, err := url.PathUnescape(path)
+	if err != nil {
+		// If decoding fails, use the original path
+		decodedPath = path
+	}
+
 	// Get host parameter (required)
 	host := r.URL.Query().Get("host")
 	if host == "" {
@@ -33,7 +40,7 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	targetURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(host, "/"), path)
+	targetURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(host, "/"), decodedPath)
 
 	parsedHeaders := make(map[string]string)
 	headersParam := r.URL.Query().Get("headers")
@@ -46,10 +53,10 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
 
-	isM3U8 := strings.HasSuffix(strings.ToLower(path), ".m3u8")
+	isM3U8 := strings.HasSuffix(strings.ToLower(decodedPath), ".m3u8")
 
 	if isM3U8 {
-		handleFileM3U8Proxy(w, targetURL, host, path, prefix, requestHeaders)
+		handleFileM3U8Proxy(w, targetURL, host, decodedPath, prefix, requestHeaders)
 	} else {
 		// Handle regular file (TS segments, etc.)
 		handleFileSegmentProxy(w, targetURL, requestHeaders)
@@ -152,10 +159,11 @@ func processFileKeyURI(line, host, basePath, prefix, headersParam string) string
 	if strings.HasPrefix(originalURI, "http://") || strings.HasPrefix(originalURI, "https://") {
 		// Absolute URL - extract path
 		if parsed, err := url.Parse(originalURI); err == nil {
+			encodedPath := url.PathEscape(parsed.Path)
 			newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 				webServerURL,
 				prefix,
-				parsed.Path,
+				encodedPath,
 				url.QueryEscape(host),
 				headersParam)
 		} else {
@@ -163,11 +171,12 @@ func processFileKeyURI(line, host, basePath, prefix, headersParam string) string
 		}
 	} else {
 		// Relative URL
-		newURI = fmt.Sprintf("%s%s%s%s?host=%s&headers=%s",
+		keyPath := basePath + originalURI
+		encodedKey := url.PathEscape(keyPath)
+		newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 			webServerURL,
 			prefix,
-			basePath,
-			originalURI,
+			encodedKey,
 			url.QueryEscape(host),
 			headersParam)
 	}
@@ -183,22 +192,25 @@ func processFileSegmentURL(line, host, basePath, prefix, headersParam string) st
 	if strings.HasPrefix(trimmedLine, "http://") || strings.HasPrefix(trimmedLine, "https://") {
 		// Extract path from absolute URL
 		if parsed, err := url.Parse(trimmedLine); err == nil {
+			// URL-encode the path to handle special characters
+			encodedPath := url.PathEscape(parsed.Path)
 			return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 				webServerURL,
 				prefix,
-				parsed.Path,
+				encodedPath,
 				url.QueryEscape(host),
 				headersParam)
 		}
 		return line
 	}
 
-	// Relative URL - combine with base path
-	return fmt.Sprintf("%s%s%s%s?host=%s&headers=%s",
+	// Relative URL - combine with base path and URL-encode
+	segmentPath := basePath + trimmedLine
+	encodedSegment := url.PathEscape(segmentPath)
+	return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
 		webServerURL,
 		prefix,
-		basePath,
-		trimmedLine,
+		encodedSegment,
 		url.QueryEscape(host),
 		headersParam)
 }
