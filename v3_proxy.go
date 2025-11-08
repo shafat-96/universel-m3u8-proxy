@@ -74,14 +74,28 @@ func handleUniversalM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPa
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	// Check response status
+	if resp.StatusCode != http.StatusOK {
+		sendError(w, http.StatusBadGateway, "Upstream returned non-200 status", fmt.Sprintf("Status: %d", resp.StatusCode))
+		return
+	}
+
+	body, err := readResponseBody(resp)
 	if err != nil {
 		sendError(w, http.StatusInternalServerError, "Failed to read m3u8 content", err.Error())
 		return
 	}
 
-	// Process M3U8 content
+	// Validate M3U8 content
 	m3u8Content := string(body)
+	if !strings.HasPrefix(strings.TrimSpace(m3u8Content), "#EXTM3U") {
+		sendError(w, http.StatusBadGateway, "Invalid M3U8 content", "Content does not start with #EXTM3U")
+		return
+	}
+
+	// Detect if this is a master playlist
+	isMaster := strings.Contains(m3u8Content, "#EXT-X-STREAM-INF:")
+
 	lines := strings.Split(m3u8Content, "\n")
 	newLines := make([]string, 0, len(lines))
 
@@ -95,19 +109,73 @@ func handleUniversalM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPa
 	encodedHeaders, _ := json.Marshal(headers)
 	headersParam := url.QueryEscape(string(encodedHeaders))
 
+	// Track current tag for master playlist processing
+	var currentTag string
+
 	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
-			// Handle key URIs in #EXT-X-KEY lines
-			if strings.Contains(line, "URI=") {
-				newLines = append(newLines, processUniversalKeyURI(line, host, basePath, prefix, headersParam))
-			} else {
-				newLines = append(newLines, line)
-			}
-		} else if strings.TrimSpace(line) != "" {
-			// Handle segment URLs
-			newLines = append(newLines, processUniversalSegmentURL(line, host, basePath, prefix, headersParam))
-		} else {
+		trimmed := strings.TrimSpace(line)
+		
+		// Skip empty lines
+		if trimmed == "" {
 			newLines = append(newLines, line)
+			continue
+		}
+
+		var inlineURL string
+
+		if strings.HasPrefix(trimmed, "#") {
+			// Track tag type for master playlists
+			if isMaster {
+				tagParts := strings.SplitN(trimmed, ":", 2)
+				if len(tagParts) > 0 {
+					currentTag = strings.ToUpper(strings.TrimPrefix(tagParts[0], "#"))
+				}
+			}
+
+			// Check for inline URIs in tags (e.g., #EXT-X-KEY)
+			if strings.Contains(trimmed, `URI="`) {
+				// Extract URI from quotes
+				if start := strings.Index(trimmed, `URI="`); start != -1 {
+					start += 5
+					if end := strings.Index(trimmed[start:], `"`); end != -1 {
+						inlineURL = trimmed[start : start+end]
+					}
+				}
+			}
+
+			// If no inline URL found, just add the line as-is
+			if inlineURL == "" {
+				newLines = append(newLines, line)
+				continue
+			}
+		}
+
+		// Determine the URL to process
+		urlToProcess := inlineURL
+		if urlToProcess == "" {
+			urlToProcess = trimmed
+		}
+
+		// For master playlists, only rewrite specific tags
+		if isMaster && currentTag != "EXT-X-STREAM-INF" && currentTag != "EXT-X-MEDIA" && currentTag != "EXT-X-I-FRAME-STREAM-INF" {
+			newLines = append(newLines, line)
+			continue
+		}
+
+		// Resolve and rewrite the URL
+		resolvedURL := resolveUniversalURL(urlToProcess, targetURL, host, basePath, prefix)
+		proxyURL := fmt.Sprintf("%s%s%s?host=%s&headers=%s",
+			webServerURL,
+			prefix,
+			resolvedURL,
+			url.QueryEscape(host),
+			headersParam)
+
+		// Replace the URL in the line
+		if inlineURL != "" {
+			newLines = append(newLines, strings.Replace(line, inlineURL, proxyURL, 1))
+		} else {
+			newLines = append(newLines, proxyURL)
 		}
 	}
 
@@ -140,76 +208,30 @@ func handleUniversalSegmentProxy(w http.ResponseWriter, targetURL string, header
 	}
 }
 
-// processUniversalKeyURI processes encryption key URIs in M3U8 playlists with dynamic prefix
-func processUniversalKeyURI(line, host, basePath, prefix, headersParam string) string {
-	// Extract URI from the line
-	start := strings.Index(line, `URI="`)
-	if start == -1 {
-		return line
-	}
-	start += 5 // len(`URI="`)
-
-	end := strings.Index(line[start:], `"`)
-	if end == -1 {
-		return line
-	}
-
-	originalURI := line[start : start+end]
-
-	// Build the new proxy URI
-	var newURI string
-	if strings.HasPrefix(originalURI, "http://") || strings.HasPrefix(originalURI, "https://") {
-		// Absolute URL - extract path after prefix
-		if parsed, err := url.Parse(originalURI); err == nil {
-			pathPart := strings.TrimPrefix(parsed.Path, prefix)
-			newURI = fmt.Sprintf("%s%s%s?host=%s&headers=%s",
-				webServerURL,
-				prefix,
-				pathPart,
-				url.QueryEscape(host),
-				headersParam)
-		} else {
-			return line
-		}
-	} else {
-		// Relative URL
-		newURI = fmt.Sprintf("%s%s%s%s?host=%s&headers=%s",
-			webServerURL,
-			prefix,
-			basePath,
-			originalURI,
-			url.QueryEscape(host),
-			headersParam)
-	}
-
-	return strings.Replace(line, originalURI, newURI, 1)
-}
-
-// processUniversalSegmentURL processes segment URLs in M3U8 playlists with dynamic prefix
-func processUniversalSegmentURL(line, host, basePath, prefix, headersParam string) string {
-	trimmedLine := strings.TrimSpace(line)
-
+// resolveUniversalURL resolves a URL (absolute or relative) and returns the path portion for proxying
+func resolveUniversalURL(urlStr, targetURL, host, basePath, prefix string) string {
 	// Check if it's an absolute URL
-	if strings.HasPrefix(trimmedLine, "http://") || strings.HasPrefix(trimmedLine, "https://") {
-		// Extract path from absolute URL
-		if parsed, err := url.Parse(trimmedLine); err == nil {
-			pathPart := strings.TrimPrefix(parsed.Path, prefix)
-			return fmt.Sprintf("%s%s%s?host=%s&headers=%s",
-				webServerURL,
-				prefix,
-				pathPart,
-				url.QueryEscape(host),
-				headersParam)
+	if strings.HasPrefix(urlStr, "http://") || strings.HasPrefix(urlStr, "https://") {
+		// Parse and extract path
+		if parsed, err := url.Parse(urlStr); err == nil {
+			// Return path without the prefix (will be added back by caller)
+			return strings.TrimPrefix(parsed.Path, prefix)
 		}
-		return line
+		return urlStr
 	}
 
-	// Relative URL - combine with base path
-	return fmt.Sprintf("%s%s%s%s?host=%s&headers=%s",
-		webServerURL,
-		prefix,
-		basePath,
-		trimmedLine,
-		url.QueryEscape(host),
-		headersParam)
+	// Relative URL - resolve against target URL
+	if baseURL, err := url.Parse(targetURL); err == nil {
+		// Create a URL relative to the base
+		baseURL.Path = strings.TrimSuffix(baseURL.Path, strings.TrimPrefix(strings.TrimPrefix(targetURL, baseURL.Scheme+"://"+baseURL.Host), "/"))
+		if relURL, err := url.Parse(basePath + urlStr); err == nil {
+			resolvedPath := baseURL.ResolveReference(relURL).Path
+			// Return path without the prefix
+			return strings.TrimPrefix(resolvedPath, prefix)
+		}
+	}
+
+	// Fallback: combine base path with URL
+	return basePath + urlStr
 }
+
