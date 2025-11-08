@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -22,7 +23,7 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 	prefix := "/" + pathParts[0] + "/"
 	path := pathParts[1]
 
-	// Decode URL path
+	// URL decode
 	decodedPath, err := url.PathUnescape(path)
 	if err != nil {
 		decodedPath = path
@@ -33,7 +34,18 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get required host parameter
+	// Decode Base64 filename if detected
+	pathSegments := strings.Split(decodedPath, "/")
+	lastSegment := pathSegments[len(pathSegments)-1]
+	if strings.Contains(lastSegment, "=") {
+		if decodedFile, err := base64.StdEncoding.DecodeString(strings.TrimSuffix(lastSegment, ".m3u8")); err == nil {
+			lastSegment = string(decodedFile) + ".m3u8"
+			pathSegments[len(pathSegments)-1] = lastSegment
+			decodedPath = strings.Join(pathSegments, "/")
+		}
+	}
+
+	// Required host parameter
 	host := r.URL.Query().Get("host")
 	if host == "" {
 		sendError(w, http.StatusBadRequest, "host parameter is required", nil)
@@ -42,7 +54,7 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	targetURL := fmt.Sprintf("%s/%s", strings.TrimSuffix(host, "/"), decodedPath)
 
-	// Parse optional headers
+	// Optional headers
 	parsedHeaders := make(map[string]string)
 	headersParam := r.URL.Query().Get("headers")
 	if headersParam != "" {
@@ -55,7 +67,7 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
 
-	// Check if this is an M3U8 file
+	// Determine if this is an M3U8
 	isM3U8 := strings.HasSuffix(strings.ToLower(decodedPath), ".m3u8")
 
 	if isM3U8 {
@@ -65,7 +77,7 @@ func fileProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleFileM3U8Proxy rewrites M3U8 playlists to go through the proxy
+// handleFileM3U8Proxy rewrites M3U8 playlists to proxy segments and keys
 func handleFileM3U8Proxy(w http.ResponseWriter, targetURL, host, originalPath, prefix string, headers map[string]string) {
 	resp, err := makeRequest(targetURL, headers, nil)
 	if err != nil {
