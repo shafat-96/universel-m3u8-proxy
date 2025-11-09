@@ -10,6 +10,30 @@ import (
 	"strings"
 )
 
+var sharedClient = &http.Client{
+    CheckRedirect: func(req *http.Request, via []*http.Request) error {
+        if len(via) >= 5 {
+            return fmt.Errorf("stopped after 5 redirects")
+        }
+        return nil
+    },
+}
+
+// resolveURL resolves a relative URL against a base URL
+func resolveURL(href, base string) string {
+    baseURL, err := url.Parse(base)
+    if err != nil {
+        return href
+    }
+
+    relURL, err := url.Parse(href)
+    if err != nil {
+        return href
+    }
+
+    return baseURL.ResolveReference(relURL).String()
+}
+
 // validateRequest validates and extracts URL and headers from request
 func validateRequest(r *http.Request) (string, map[string]string, error) {
 	targetURL := r.URL.Query().Get("url")
@@ -52,16 +76,6 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
 
-	// Create HTTP client and request
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("stopped after 5 redirects")
-			}
-			return nil
-		},
-	}
-
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		sendError(w, "Failed to create request", err.Error())
@@ -72,7 +86,7 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := sharedClient.Do(req)
 	if err != nil {
 		sendError(w, "Failed to proxy m3u8 content", err.Error())
 		return
@@ -147,15 +161,6 @@ func tsProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("stopped after 5 redirects")
-			}
-			return nil
-		},
-	}
-
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		sendError(w, "Failed to create request", err.Error())
@@ -166,7 +171,7 @@ func tsProxyHandler(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := sharedClient.Do(req)
 	if err != nil {
 		sendError(w, "Failed to proxy segment", err.Error())
 		return
@@ -214,15 +219,6 @@ func mp4ProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	requestHeaders := generateRequestHeaders(targetURL, parsedHeaders)
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("stopped after 5 redirects")
-			}
-			return nil
-		},
-	}
-
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		sendError(w, "Failed to create request", err.Error())
@@ -233,7 +229,7 @@ func mp4ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set(k, v)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := sharedClient.Do(req)
 	if err != nil {
 		sendError(w, "Failed to proxy mp4 content", err.Error())
 		return
@@ -284,15 +280,6 @@ func fetchHandler(w http.ResponseWriter, r *http.Request) {
 
 	referer := r.URL.Query().Get("ref")
 
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("stopped after 5 redirects")
-			}
-			return nil
-		},
-	}
-
 	req, err := http.NewRequest("GET", targetURL, nil)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -308,7 +295,7 @@ func fetchHandler(w http.ResponseWriter, r *http.Request) {
 		req.Header.Set("Referer", referer)
 	}
 
-	resp, err := client.Do(req)
+	resp, err := sharedClient.Do(req)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -329,21 +316,6 @@ func fetchHandler(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// resolveURL resolves a relative URL against a base URL
-func resolveURL(href, base string) string {
-	baseURL, err := url.Parse(base)
-	if err != nil {
-		return href
-	}
-
-	relURL, err := url.Parse(href)
-	if err != nil {
-		return href
-	}
-
-	return baseURL.ResolveReference(relURL).String()
-}
-
 // videostrProxyHandler handles requests with videostr.net specific headers
 // URL format: http://localhost:3000/{url_without_https}
 func videostrProxyHandler(w http.ResponseWriter, r *http.Request) {
@@ -360,16 +332,6 @@ func videostrProxyHandler(w http.ResponseWriter, r *http.Request) {
 	targetURL := "https://" + path
 	if r.URL.RawQuery != "" {
 		targetURL += "?" + r.URL.RawQuery
-	}
-
-	// Reuse HTTP client with connection pooling
-	client := &http.Client{
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("stopped after 5 redirects")
-			}
-			return nil
-		},
 	}
 
 	req, err := http.NewRequest("GET", targetURL, nil)
@@ -389,7 +351,7 @@ func videostrProxyHandler(w http.ResponseWriter, r *http.Request) {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
 	req.Header.Set("Accept", "*/*")
 
-	resp, err := client.Do(req)
+	resp, err := sharedClient.Do(req)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
