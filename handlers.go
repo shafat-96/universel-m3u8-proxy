@@ -26,13 +26,6 @@ func resolveURL(href, base string) string {
         return href
     }
 
-    // Trim whitespace and handle protocol-relative URLs like //example.com/seg.ts
-    href = strings.TrimSpace(href)
-    if strings.HasPrefix(href, "//") {
-        // Use the base scheme for scheme-relative references
-        return baseURL.Scheme + ":" + href
-    }
-
     relURL, err := url.Parse(href)
     if err != nil {
         return href
@@ -110,8 +103,8 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	lines := strings.Split(m3u8Content, "\n")
 	newLines := make([]string, 0, len(lines))
 
-	// Encode headers for URL parameters (use original parsedHeaders, not generated requestHeaders)
-	headersJSON, _ := json.Marshal(parsedHeaders)
+	// Encode headers for URL parameters
+	headersJSON, _ := json.Marshal(requestHeaders)
 	encodedHeaders := url.QueryEscape(string(headersJSON))
 
 	for _, line := range lines {
@@ -202,69 +195,9 @@ func tsProxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// If the content is an M3U8 playlist, rewrite its lines like m3u8ProxyHandler
-	if contentType == "application/vnd.apple.mpegurl" || strings.HasSuffix(targetURL, ".m3u8") {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			sendError(w, "Failed to read m3u8 content", err.Error())
-			return
-		}
-
-		m3u8Content := string(body)
-		lines := strings.Split(m3u8Content, "\n")
-		newLines := make([]string, 0, len(lines))
-
-		// Encode headers for URL parameters (use original parsedHeaders)
-		headersJSON, _ := json.Marshal(parsedHeaders)
-		encodedHeaders := url.QueryEscape(string(headersJSON))
-
-		for _, line := range lines {
-			if strings.HasPrefix(line, "#") {
-				// Handle URI in tags (e.g., encryption keys)
-				if strings.Contains(line, "URI=") {
-					if start := strings.Index(line, `URI="`); start != -1 {
-						start += 5 // len(`URI="`)
-						if end := strings.Index(line[start:], `"`); end != -1 {
-							originalURI := line[start : start+end]
-							resolvedKeyURL := resolveURL(originalURI, targetURL)
-							newURI := fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
-								webServerURL,
-								url.QueryEscape(resolvedKeyURL),
-								encodedHeaders)
-							line = strings.Replace(line, originalURI, newURI, 1)
-						}
-					}
-				}
-				newLines = append(newLines, line)
-			} else if strings.TrimSpace(line) != "" {
-				resolvedURL := resolveURL(line, targetURL)
-				var newURL string
-				if strings.HasSuffix(line, ".m3u8") {
-					newURL = fmt.Sprintf("%s/proxy?url=%s&headers=%s",
-						webServerURL,
-						url.QueryEscape(resolvedURL),
-						encodedHeaders)
-				} else {
-					newURL = fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
-						webServerURL,
-						url.QueryEscape(resolvedURL),
-						encodedHeaders)
-				}
-				newLines = append(newLines, newURL)
-			} else {
-				newLines = append(newLines, line)
-			}
-		}
-
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.WriteHeader(resp.StatusCode)
-		w.Write([]byte(strings.Join(newLines, "\n")))
-		return
-	}
-
-	// Default: stream non-m3u8 content as-is
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(resp.StatusCode)
+
 	io.Copy(w, resp.Body)
 }
 
