@@ -26,21 +26,12 @@ func resolveURL(href, base string) string {
 		return href
 	}
 
-<<<<<<< HEAD
 	relURL, err := url.Parse(href)
 	if err != nil {
 		return href
 	}
 
 	return baseURL.ResolveReference(relURL).String()
-=======
-    relURL, err := url.Parse(href)
-    if err != nil {
-        return href
-    }
-
-    return baseURL.ResolveReference(relURL).String()
->>>>>>> 0e49de1e4def82549646426b790c3aa4d82bb9b9
 }
 
 // validateRequest validates and extracts URL and headers from request
