@@ -103,8 +103,8 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	lines := strings.Split(m3u8Content, "\n")
 	newLines := make([]string, 0, len(lines))
 
-	// Encode headers for URL parameters
-	headersJSON, _ := json.Marshal(requestHeaders)
+	// Encode headers for URL parameters (use original parsedHeaders, not generated requestHeaders)
+	headersJSON, _ := json.Marshal(parsedHeaders)
 	encodedHeaders := url.QueryEscape(string(headersJSON))
 
 	for _, line := range lines {
