@@ -77,12 +77,12 @@ func routeHandler(w http.ResponseWriter, r *http.Request) {
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	corsMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		
+
 		allowedOriginsDisplay := "All (*)"
 		if len(allowedOrigins) > 0 {
 			allowedOriginsDisplay = strings.Join(allowedOrigins, ", ")
 		}
-		
+
 		response := fmt.Sprintf(`{
   "message": "M3U8 Cross-Origin Proxy Server",
   "endpoints": {
@@ -94,7 +94,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
   },
   "allowedOrigins": "%s"
 }`, allowedOriginsDisplay)
-		
+
 		w.Write([]byte(response))
 	})(w, r)
 }
