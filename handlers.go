@@ -108,7 +108,8 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	encodedHeaders := url.QueryEscape(string(headersJSON))
 
 	for _, line := range lines {
-		if strings.HasPrefix(line, "#") {
+		trimmedLine := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmedLine, "#") {
 			// Handle URI in tags (e.g., encryption keys)
 			if strings.Contains(line, "URI=") {
 				if start := strings.Index(line, `URI="`); start != -1 {
@@ -125,15 +126,18 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			newLines = append(newLines, line)
-		} else if strings.TrimSpace(line) != "" {
-			resolvedURL := resolveURL(line, targetURL)
+		} else if trimmedLine != "" {
+			// Trim the line to ensure clean URL resolution
+			resolvedURL := resolveURL(trimmedLine, targetURL)
 			var newURL string
-			if strings.HasSuffix(line, ".m3u8") {
+			// Check if the resolved URL ends with .m3u8 (variant playlist)
+			if strings.HasSuffix(strings.ToLower(resolvedURL), ".m3u8") {
 				newURL = fmt.Sprintf("%s/proxy?url=%s&headers=%s",
 					webServerURL,
 					url.QueryEscape(resolvedURL),
 					encodedHeaders)
 			} else {
+				// For all other files (segments, keys, etc.), use ts-proxy
 				newURL = fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
 					webServerURL,
 					url.QueryEscape(resolvedURL),
