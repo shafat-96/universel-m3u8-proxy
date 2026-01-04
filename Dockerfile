@@ -1,9 +1,16 @@
-# Build stage
+# ---------- Build stage ----------
 FROM golang:1.21-alpine AS builder
 
 WORKDIR /app
 
-# Copy go mod files
+# Install git (required for GOPROXY=direct)
+RUN apk add --no-cache git ca-certificates
+
+# Fix Go module TLS / proxy issues
+ENV GOPROXY=direct
+ENV GOSUMDB=off
+
+# Copy go mod files first (better caching)
 COPY go.mod go.sum ./
 
 # Download dependencies
@@ -12,10 +19,11 @@ RUN go mod download
 # Copy source code
 COPY *.go ./
 
-# Build the application
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o proxy-server .
+# Build static binary
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    go build -ldflags="-s -w" -o proxy-server .
 
-# Runtime stage
+# ---------- Runtime stage ----------
 FROM alpine:latest
 
 RUN apk --no-cache add ca-certificates
@@ -24,9 +32,6 @@ WORKDIR /root/
 
 # Copy the binary from builder
 COPY --from=builder /app/proxy-server .
-
-# Copy .env file (optional, can be overridden with environment variables)
-COPY .env .env
 
 EXPOSE 3000
 
