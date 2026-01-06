@@ -5,7 +5,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -23,19 +22,8 @@ func main() {
 	}
 
 	// Get configuration from environment
-	host := getEnv("HOST", "0.0.0.0")
+	host := getEnv("HOST", "localhost")
 	port := getEnv("PORT", "3000")
-
-	// Adjust port for PM2 cluster mode (increments port based on instance ID)
-	if pm2Id := os.Getenv("NODE_APP_INSTANCE"); pm2Id != "" {
-		if instanceId, err := strconv.Atoi(pm2Id); err == nil {
-			if portNum, err := strconv.Atoi(port); err == nil {
-				port = strconv.Itoa(portNum + instanceId)
-				log.Printf("Running in PM2 Cluster Mode (Instance: %d). Listening on port: %s", instanceId, port)
-			}
-		}
-	}
-
 	publicURL := getEnv("PUBLIC_URL", fmt.Sprintf("http://%s:%s", host, port))
 	webServerURL = publicURL
 
