@@ -23,7 +23,7 @@ func main() {
 	}
 
 	// Get configuration from environment
-	host := getEnv("HOST", "localhost")
+	host := getEnv("HOST", "0.0.0.0")
 	port := getEnv("PORT", "3000")
 
 	// Adjust port for PM2 cluster mode (increments port based on instance ID)
