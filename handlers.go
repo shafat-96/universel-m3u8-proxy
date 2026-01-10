@@ -4,13 +4,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
 var sharedClient = &http.Client{
+	Transport: &http.Transport{
+		DisableKeepAlives:   false,
+		MaxIdleConns:        2000,
+		MaxIdleConnsPerHost: 500,
+		IdleConnTimeout:     90 * time.Second,
+	},
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
 		if len(via) >= 5 {
 			return fmt.Errorf("stopped after 5 redirects")
@@ -55,7 +61,6 @@ func validateRequest(r *http.Request) (string, map[string]string, error) {
 
 // sendError sends an error response
 func sendError(w http.ResponseWriter, message string, details interface{}) {
-	log.Printf("%s: %v", message, details)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusInternalServerError)
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -350,106 +355,6 @@ func fetchHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
-}
-
-// videostrProxyHandler handles requests with videostr.net specific headers
-// URL format: http://localhost:3000/{url_without_https}
-func videostrProxyHandler(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, "/")
-
-	if path == "" {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "URL path is required"})
-		return
-	}
-
-	// Construct the full URL with https://
-	targetURL := "https://" + path
-	if r.URL.RawQuery != "" {
-		targetURL += "?" + r.URL.RawQuery
-	}
-
-	req, err := http.NewRequest("GET", targetURL, nil)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": "Request failed",
-			"error":   err.Error(),
-		})
-		return
-	}
-
-	// Set videostr.net specific headers
-	req.Header.Set("Referer", "https://videostr.net/")
-	req.Header.Set("Origin", "https://videostr.net/")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
-	req.Header.Set("Accept", "*/*")
-
-	resp, err := sharedClient.Do(req)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"message": "Request failed",
-			"error":   err.Error(),
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	contentType := resp.Header.Get("Content-Type")
-	isM3U8 := strings.Contains(contentType, "mpegurl") || strings.HasSuffix(path, ".m3u8")
-
-	if isM3U8 {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			return
-		}
-
-		lines := strings.Split(string(body), "\n")
-		newLines := make([]string, 0, len(lines))
-
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if strings.HasPrefix(line, "#") {
-				if strings.Contains(line, "URI=") {
-					if start := strings.Index(line, `URI="`); start != -1 {
-						start += 5
-						if end := strings.Index(line[start:], `"`); end != -1 {
-							originalURI := line[start : start+end]
-							resolvedKeyURL := resolveURL(originalURI, targetURL)
-							proxyPath := strings.TrimPrefix(strings.TrimPrefix(resolvedKeyURL, "https://"), "http://")
-							newURI := webServerURL + "/" + proxyPath
-							line = strings.Replace(line, originalURI, newURI, 1)
-						}
-					}
-				}
-				newLines = append(newLines, line)
-			} else if trimmed != "" {
-				resolvedURL := resolveURL(line, targetURL)
-				proxyPath := strings.TrimPrefix(strings.TrimPrefix(resolvedURL, "https://"), "http://")
-				newLines = append(newLines, webServerURL+"/"+proxyPath)
-			} else {
-				newLines = append(newLines, line)
-			}
-		}
-
-		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
-		w.Write([]byte(strings.Join(newLines, "\n")))
-	} else {
-		// Stream non-M3U8 content directly
-		if contentType != "" {
-			w.Header().Set("Content-Type", contentType)
-		}
-		if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
-			w.Header().Set("Content-Length", contentLength)
-		}
-		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
-	}
 }
 
 // ghostProxyHandler handles requests through a Ghost IP proxy

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 )
@@ -17,9 +18,7 @@ var (
 
 func main() {
 	// Load .env file
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found, using environment variables")
-	}
+	godotenv.Load()
 
 	// Get configuration from environment
 	host := getEnv("HOST", "localhost")
@@ -36,19 +35,24 @@ func main() {
 		}
 	}
 
+	// Configure default transport
+	http.DefaultTransport.(*http.Transport).MaxIdleConnsPerHost = 500
+
 	// Setup routes with custom handler
 	http.HandleFunc("/", routeHandler)
 
-	// Start server
+	// Create server with timeouts
 	addr := fmt.Sprintf("%s:%s", host, port)
-	log.Printf("M3U8 Proxy Server running at http://%s", addr)
-	if len(allowedOrigins) > 0 {
-		log.Printf("Allowed origins: %s", strings.Join(allowedOrigins, ", "))
-	} else {
-		log.Println("Allowed origins: All (*)")
+	server := &http.Server{
+		Addr:         addr,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 60 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
-	if err := http.ListenAndServe(addr, nil); err != nil {
+	log.Printf("M3U8 Proxy Server running at http://%s", addr)
+
+	if err := server.ListenAndServe(); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -71,8 +75,10 @@ func routeHandler(w http.ResponseWriter, r *http.Request) {
 	case path == "/ghost-proxy":
 		corsMiddleware(ghostProxyHandler)(w, r)
 	default:
-		// Catch-all: treat as videostr proxy (URL without https://)
-		corsMiddleware(videostrProxyHandler)(w, r)
+		// Unknown endpoint
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		w.Write([]byte(`{"error": "Endpoint not found"}`))
 	}
 }
 
@@ -92,8 +98,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
     "ts": "/ts-proxy?url={ts_segment_url}&headers={optional_headers}",
     "fetch": "/fetch?url={any_url}&ref={optional_referer}",
     "mp4": "/mp4-proxy?url={mp4_url}&headers={optional_headers}",
-    "ghost": "/ghost-proxy?url={target_url}&proxy={proxy_url}&headers={optional_headers}",
-    "videostr": "/{url_without_https} (with videostr.net headers)"
+    "ghost": "/ghost-proxy?url={target_url}&proxy={proxy_url}&headers={optional_headers}"
   },
   "allowedOrigins": "%s"
 }`, allowedOriginsDisplay)
