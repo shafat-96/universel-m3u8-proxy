@@ -68,6 +68,8 @@ func routeHandler(w http.ResponseWriter, r *http.Request) {
 		corsMiddleware(mp4ProxyHandler)(w, r)
 	case path == "/fetch":
 		corsMiddleware(fetchHandler)(w, r)
+	case path == "/ghost-proxy":
+		corsMiddleware(ghostProxyHandler)(w, r)
 	default:
 		// Catch-all: treat as videostr proxy (URL without https://)
 		corsMiddleware(videostrProxyHandler)(w, r)
@@ -90,6 +92,7 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
     "ts": "/ts-proxy?url={ts_segment_url}&headers={optional_headers}",
     "fetch": "/fetch?url={any_url}&ref={optional_referer}",
     "mp4": "/mp4-proxy?url={mp4_url}&headers={optional_headers}",
+    "ghost": "/ghost-proxy?url={target_url}&proxy={proxy_url}&headers={optional_headers}",
     "videostr": "/{url_without_https} (with videostr.net headers)"
   },
   "allowedOrigins": "%s"
