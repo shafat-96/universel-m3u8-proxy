@@ -371,7 +371,7 @@ func ghostProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Get proxy URL (default to the Ghost IP from the example)
 	proxyURL := r.URL.Query().Get("proxy")
 	if proxyURL == "" {
-		proxyURL = "http://5.231.61.237:8080"
+		proxyURL = "http://5.231.61.126:8080"
 	}
 
 	// Parse proxy URL
