@@ -25,6 +25,25 @@ var sharedClient = &http.Client{
 	},
 }
 
+// isM3U8URL checks if a URL points to an .m3u8 (or .m3u) file, ignoring query string and fragment
+func isM3U8URL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		// Fallback: strip query manually
+		if i := strings.Index(rawURL, "?"); i != -1 {
+			rawURL = rawURL[:i]
+		}
+		if i := strings.Index(rawURL, "#"); i != -1 {
+			rawURL = rawURL[:i]
+		}
+		lower := strings.ToLower(rawURL)
+		return strings.HasSuffix(lower, ".m3u8") || strings.HasSuffix(lower, ".m3u")
+	}
+	// Use path only (safe from query/fragment)
+	path := strings.ToLower(u.Path)
+	return strings.HasSuffix(path, ".m3u8") || strings.HasSuffix(path, ".m3u")
+}
+
 // resolveURL resolves a relative URL against a base URL
 func resolveURL(href, base string) string {
 	baseURL, err := url.Parse(base)
@@ -137,17 +156,15 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			newLines = append(newLines, line)
 		} else if trimmedLine != "" {
-			// Trim the line to ensure clean URL resolution
 			resolvedURL := resolveURL(trimmedLine, targetURL)
 			var newURL string
-			// Check if the resolved URL ends with .m3u8 (variant playlist)
-			if strings.HasSuffix(strings.ToLower(resolvedURL), ".m3u8") {
+			// ✅ FIXED: Use proper .m3u8 detection (ignores ?query)
+			if isM3U8URL(resolvedURL) {
 				newURL = fmt.Sprintf("%s/proxy?url=%s&headers=%s",
 					webServerURL,
 					url.QueryEscape(resolvedURL),
 					encodedHeaders)
 			} else {
-				// For all other files (segments, keys, etc.), use ts-proxy
 				newURL = fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
 					webServerURL,
 					url.QueryEscape(resolvedURL),
@@ -455,7 +472,7 @@ func ghostProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if it's an M3U8 file
 	contentType := resp.Header.Get("Content-Type")
 	isM3U8 := strings.Contains(contentType, "mpegurl") ||
-		strings.HasSuffix(strings.ToLower(targetURL), ".m3u8")
+		isM3U8URL(targetURL) // ✅ Use fixed detector
 
 	if isM3U8 {
 		// Read and process M3U8 content
@@ -500,18 +517,16 @@ func ghostProxyHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				newLines = append(newLines, line)
 			} else if trimmedLine != "" {
-				// Resolve and proxy segment URLs
 				resolvedURL := resolveURL(trimmedLine, targetURL)
 				var newURL string
-				// Check if the resolved URL ends with .m3u8 (variant playlist)
-				if strings.HasSuffix(strings.ToLower(resolvedURL), ".m3u8") {
+				// ✅ FIXED: Use proper .m3u8 detection
+				if isM3U8URL(resolvedURL) {
 					newURL = fmt.Sprintf("%s/ghost-proxy?url=%s&proxy=%s&headers=%s",
 						webServerURL,
 						url.QueryEscape(resolvedURL),
 						encodedProxy,
 						encodedHeaders)
 				} else {
-					// For all other files (segments, keys, etc.)
 					newURL = fmt.Sprintf("%s/ghost-proxy?url=%s&proxy=%s&headers=%s",
 						webServerURL,
 						url.QueryEscape(resolvedURL),
