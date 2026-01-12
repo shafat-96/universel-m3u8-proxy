@@ -105,6 +105,11 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	m3u8Content := string(body)
+
+	// Normalize line endings to handle different EOL formats (e.g., \r\n, \r)
+	m3u8Content = strings.ReplaceAll(m3u8Content, "\r\n", "\n")
+	m3u8Content = strings.ReplaceAll(m3u8Content, "\r", "\n")
+
 	lines := strings.Split(m3u8Content, "\n")
 	newLines := make([]string, 0, len(lines))
 
@@ -461,6 +466,11 @@ func ghostProxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		m3u8Content := string(body)
+
+		// Normalize line endings to handle different EOL formats (e.g., \r\n, \r)
+		m3u8Content = strings.ReplaceAll(m3u8Content, "\r\n", "\n")
+		m3u8Content = strings.ReplaceAll(m3u8Content, "\r", "\n")
+
 		lines := strings.Split(m3u8Content, "\n")
 		newLines := make([]string, 0, len(lines))
 
