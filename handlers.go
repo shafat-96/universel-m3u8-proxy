@@ -158,13 +158,18 @@ func m3u8ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		} else if trimmedLine != "" {
 			resolvedURL := resolveURL(trimmedLine, targetURL)
 			var newURL string
-			// ✅ FIXED: Use proper .m3u8 detection (ignores ?query)
-			if isM3U8URL(resolvedURL) {
+			// ✅ FIXED: Detect M3U8 by checking if it's a variant/master playlist
+			// Check if this is a master playlist (contains #EXT-X-STREAM-INF)
+			isMasterPlaylist := strings.Contains(m3u8Content, "#EXT-X-STREAM-INF")
+
+			if isMasterPlaylist || isM3U8URL(resolvedURL) {
+				// This is likely another M3U8 playlist (variant stream)
 				newURL = fmt.Sprintf("%s/proxy?url=%s&headers=%s",
 					webServerURL,
 					url.QueryEscape(resolvedURL),
 					encodedHeaders)
 			} else {
+				// This is a TS segment or other media file
 				newURL = fmt.Sprintf("%s/ts-proxy?url=%s&headers=%s",
 					webServerURL,
 					url.QueryEscape(resolvedURL),
@@ -519,14 +524,19 @@ func ghostProxyHandler(w http.ResponseWriter, r *http.Request) {
 			} else if trimmedLine != "" {
 				resolvedURL := resolveURL(trimmedLine, targetURL)
 				var newURL string
-				// ✅ FIXED: Use proper .m3u8 detection
-				if isM3U8URL(resolvedURL) {
+				// ✅ FIXED: Detect M3U8 by checking if it's a variant/master playlist
+				// Check if this is a master playlist (contains #EXT-X-STREAM-INF)
+				isMasterPlaylist := strings.Contains(m3u8Content, "#EXT-X-STREAM-INF")
+
+				if isMasterPlaylist || isM3U8URL(resolvedURL) {
+					// This is likely another M3U8 playlist (variant stream)
 					newURL = fmt.Sprintf("%s/ghost-proxy?url=%s&proxy=%s&headers=%s",
 						webServerURL,
 						url.QueryEscape(resolvedURL),
 						encodedProxy,
 						encodedHeaders)
 				} else {
+					// This is a TS segment or other media file
 					newURL = fmt.Sprintf("%s/ghost-proxy?url=%s&proxy=%s&headers=%s",
 						webServerURL,
 						url.QueryEscape(resolvedURL),
