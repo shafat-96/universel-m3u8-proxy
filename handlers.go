@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -567,5 +568,166 @@ func ghostProxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(resp.StatusCode)
 		io.Copy(w, resp.Body)
+	}
+}
+
+// rewritePathURI takes an original URI from an m3u8 playlist, resolves it against the targetURL,
+// and reformats it to the path-based proxy format: /domain.com/path/to/segment.ts
+func rewritePathURI(originalURI, targetURLStr string) string {
+	resolved := resolveURL(originalURI, targetURLStr)
+	parsed, err := url.Parse(resolved)
+	if err != nil {
+		return originalURI
+	}
+
+	newURI := "/" + parsed.Host + parsed.Path
+	if parsed.RawQuery != "" {
+		newURI += "?" + parsed.RawQuery
+	}
+	return newURI
+}
+
+// pathProxyHandler handles requests where the target URL is embedded in the path
+// Matches the logic to route domain/path and hardcodes the required Referer/User-Agent
+func pathProxyHandler(w http.ResponseWriter, r *http.Request) {
+	fullPath := r.URL.Path
+	fullPath = strings.TrimPrefix(fullPath, "/")
+
+	// Clean potentially multiple slashes or protocol schemes
+	fullPath = strings.TrimPrefix(fullPath, "https:/")
+	fullPath = strings.TrimPrefix(fullPath, "http:/")
+	for strings.HasPrefix(fullPath, "/") {
+		fullPath = strings.TrimPrefix(fullPath, "/")
+	}
+
+	pathSegments := strings.SplitN(fullPath, "/", 2)
+	if len(pathSegments) < 2 {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Endpoint not found"})
+		return
+	}
+
+	targetDomain := pathSegments[0]
+	actualPath := "/" + pathSegments[1]
+
+	targetURLStr := fmt.Sprintf("https://%s%s", targetDomain, actualPath)
+	if r.URL.RawQuery != "" {
+		targetURLStr += "?" + r.URL.RawQuery
+	}
+
+	req, err := http.NewRequest("GET", targetURLStr, nil)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Failed to create request"})
+		return
+	}
+
+	// Hardcode headers as requested
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Referer", "https://videostr.net/")
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Connection", "keep-alive")
+	// Forward Range header if provided (crucial for streaming video seeks)
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+		req.Header.Set("Range", rangeHeader)
+	}
+
+	resp, err := sharedClient.Do(req)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Upstream Error", "target": targetURLStr})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":  "Upstream Error",
+			"target": targetURLStr,
+			"status": resp.StatusCode,
+		})
+		return
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+
+	// Use bufio.Reader to peek the first 7 bytes without loading the whole segment into memory yet
+	br := bufio.NewReader(resp.Body)
+	peek, _ := br.Peek(7)
+
+	isPlaylist := strings.HasSuffix(actualPath, ".m3u8") || string(peek) == "#EXTM3U" || strings.Contains(strings.ToLower(contentType), "mpegurl")
+
+	if isPlaylist {
+		body, err := io.ReadAll(br)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "Failed to read content"})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+
+		m3u8Content := string(body)
+		m3u8Content = strings.ReplaceAll(m3u8Content, "\r\n", "\n")
+		m3u8Content = strings.ReplaceAll(m3u8Content, "\r", "\n")
+
+		lines := strings.Split(m3u8Content, "\n")
+		var newLines []string
+
+		for _, line := range lines {
+			trimmedLine := strings.TrimSpace(line)
+			if trimmedLine == "" {
+				continue
+			}
+
+			if strings.HasPrefix(trimmedLine, "#") {
+				if strings.Contains(trimmedLine, "URI=") {
+					if start := strings.Index(trimmedLine, `URI="`); start != -1 {
+						start += 5
+						if end := strings.Index(trimmedLine[start:], `"`); end != -1 {
+							originalURI := trimmedLine[start : start+end]
+							newURI := rewritePathURI(originalURI, targetURLStr)
+							line = strings.Replace(line, originalURI, newURI, 1)
+						}
+					}
+				}
+				newLines = append(newLines, line)
+			} else {
+				// Segment path
+				newSegmentURI := rewritePathURI(trimmedLine, targetURLStr)
+				newLines = append(newLines, newSegmentURI)
+			}
+		}
+
+		w.Write([]byte(strings.Join(newLines, "\n") + "\n"))
+	} else {
+		// Streaming Binary Segment instantly
+		if contentType == "" {
+			contentType = "video/mp2t"
+		}
+		w.Header().Set("Content-Type", contentType)
+
+		// Provide explicit length and range so browsers/players report size instantly
+		if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
+			w.Header().Set("Content-Length", contentLength)
+		}
+		if contentRange := resp.Header.Get("Content-Range"); contentRange != "" {
+			w.Header().Set("Content-Range", contentRange)
+		}
+		if acceptRanges := resp.Header.Get("Accept-Ranges"); acceptRanges != "" {
+			w.Header().Set("Accept-Ranges", acceptRanges)
+		}
+
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.WriteHeader(resp.StatusCode)
+		
+		// Uses efficient streaming vs waiting for it all to download to memory
+		io.Copy(w, br)
 	}
 }

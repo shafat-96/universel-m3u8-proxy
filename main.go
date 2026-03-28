@@ -75,10 +75,8 @@ func routeHandler(w http.ResponseWriter, r *http.Request) {
 	case path == "/ghost-proxy":
 		corsMiddleware(ghostProxyHandler)(w, r)
 	default:
-		// Unknown endpoint
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error": "Endpoint not found"}`))
+		// Fallback to path-based proxy format: /{domain}/{path}
+		corsMiddleware(pathProxyHandler)(w, r)
 	}
 }
 
@@ -98,7 +96,8 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
     "ts": "/ts-proxy?url={ts_segment_url}&headers={optional_headers}",
     "fetch": "/fetch?url={any_url}&ref={optional_referer}",
     "mp4": "/mp4-proxy?url={mp4_url}&headers={optional_headers}",
-    "ghost": "/ghost-proxy?url={target_url}&proxy={proxy_url}&headers={optional_headers}"
+    "ghost": "/ghost-proxy?url={target_url}&proxy={proxy_url}&headers={optional_headers}",
+    "path": "/{domain}/{path} -> dynamically proxies with referer videostr.net"
   },
   "allowedOrigins": "%s"
 }`, allowedOriginsDisplay)
