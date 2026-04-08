@@ -75,10 +75,8 @@ func routeHandler(w http.ResponseWriter, r *http.Request) {
 	case path == "/ghost-proxy":
 		corsMiddleware(ghostProxyHandler)(w, r)
 	default:
-		// Unknown endpoint
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		w.Write([]byte(`{"error": "Endpoint not found"}`))
+		// Path-based proxy for any file-like path: /domain.com/path/to/file
+		corsMiddleware(pathProxyHandler)(w, r)
 	}
 }
 
