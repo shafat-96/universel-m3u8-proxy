@@ -1,14 +1,18 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/joho/godotenv"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -50,9 +54,31 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	log.Printf("M3U8 Proxy Server running at http://%s", addr)
+	// 1. Configure the listener with SO_REUSEPORT
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			err := c.Control(func(fd uintptr) {
+				// Set SO_REUSEPORT to allow multiple processes to bind to the same port
+				opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+			})
+			if err != nil {
+				return err
+			}
+			return opErr
+		},
+	}
 
-	if err := server.ListenAndServe(); err != nil {
+	// 2. Create the listener
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("M3U8 Proxy Server running at http://%s (SO_REUSEPORT enabled)", addr)
+
+	// 3. Serve HTTP
+	if err := server.Serve(ln); err != nil {
 		log.Fatal(err)
 	}
 }
